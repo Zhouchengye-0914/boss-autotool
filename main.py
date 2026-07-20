@@ -20,6 +20,7 @@ from boss_assistant.monitor import LayeredReporter
 from boss_assistant.daily_report import DailyReportGenerator
 from boss_assistant.scanner import BossJobScanner, jobs_to_tasks, save_tasks
 from boss_assistant.ui import run_ui
+from boss_assistant.instances import isolated_config
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = ROOT / "config.yaml"
@@ -101,6 +102,11 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--contact", default="", help="chat-check 仅处理联系人名称包含此文本的会话")
     result.add_argument("--max-conversations", type=int, help="chat-check 本次最多打开的未读会话数")
+    result.add_argument("--instance", default="", help="独立运行实例名称，用于隔离浏览器和运行数据")
+    result.add_argument("--port-offset", type=int, default=0, help="实例调试端口相对配置端口的偏移")
+    result.add_argument("--worker-index", type=int, default=0)
+    result.add_argument("--worker-count", type=int, default=1)
+    result.add_argument("--daily-limit", type=int, help="为独立实例覆盖每日成功上限")
     result.add_argument("--dry-run", action="store_true")
     return result
 
@@ -115,6 +121,17 @@ def main() -> int:
         if args.dry_run:
             return dry_run(args.config, args.tasks)
         config = load_config(args.config)
+        if args.instance:
+            config = isolated_config(
+                config, args.instance, args.port_offset, args.worker_index, args.worker_count
+            )
+        if args.daily_limit is not None:
+            if args.daily_limit <= 0:
+                raise ConfigError("--daily-limit 必须大于 0")
+            config = replace(
+                config,
+                scheduler=replace(config.scheduler, daily_success_limit=args.daily_limit),
+            )
         tasks_path = args.tasks
         tasks = load_tasks(tasks_path) if tasks_path else []
         if args.command == "run" and not tasks_path:
@@ -206,7 +223,9 @@ def main() -> int:
 
             def before_task():
                 if chat_monitor is not None:
-                    chat_monitor.check(force=False, allow_refresh=True)
+                    chat_monitor.check(
+                        force=False, allow_refresh=True, allow_resume_send=False
+                    )
 
             def after_task(task, result):
                 record_store.update_job_snapshot(task, **executor.last_job_snapshot)
@@ -214,7 +233,9 @@ def main() -> int:
                     return
                 if result.status.value == "success":
                     reporter.status(f"任务 {task.task_id} 已完成，检查聊天列表同步状态。")
-                    chat_monitor.check(force=True, allow_refresh=False)
+                    chat_monitor.check(
+                        force=True, allow_refresh=False, allow_resume_send=False
+                    )
 
             def verify_success(task, result):
                 if chat_monitor is None or task.operation_type.value != "communication":

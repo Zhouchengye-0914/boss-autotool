@@ -18,6 +18,7 @@ import yaml
 
 from .config import load_config
 from .persistence import ProgressStore, load_tasks
+from .scanner import save_tasks
 
 
 HTML = r"""<!doctype html>
@@ -31,12 +32,13 @@ HTML = r"""<!doctype html>
 <div class="grid"><section class="card"><h2>搜索与沟通设置</h2><div class="fields">
 <div class="wide"><label>搜索关键词（逗号或换行分隔）</label><textarea id="keywords"></textarea></div>
 <div><label>每个关键词最多页数</label><input id="pages" type="number" min="1" max="50"></div><div><label>最低薪资 K</label><input id="salary" type="number" min="0" max="100"></div>
+<div><label>并行沟通实例数（1–4）</label><input id="workers" type="number" min="1" max="4"></div><div><label>运行方式</label><input value="独立 Chrome + 独立断点" disabled></div>
 <div class="wide"><label>自动招呼语</label><textarea id="greeting"></textarea></div>
 <div class="wide"><label>排除职位词（逗号分隔）</label><input id="exclude"></div><div class="wide"><label>公司黑名单（逗号分隔）</label><input id="blacklist"></div>
 </div><div class="actions"><button onclick="saveConfig()">保存搜索设置</button><button class="dark" onclick="run('browser')">检查登录</button>
 <button class="primary wide" onclick="run('full')">一键开始：搜索 → 串行沟通 → 持续检查回复并投递</button>
 <button class="stop" onclick="stopRun()">当前步骤结束后停止</button><button class="abort" onclick="abortRun()">立即中止当前任务</button>
-<details class="advanced"><summary>单独执行某项功能（高级操作）</summary><div class="advanced-grid"><button onclick="run('scan')">只搜索岗位</button><button onclick="run('communicate')">只执行串行沟通</button><button onclick="run('check')">只检查 HR 回复</button><button class="warn" onclick="run('resume')">单次检查并自动投递</button><button class="dark wide" onclick="run('watch')">持续监控回复与简历邀请</button></div></details></div>
+<details class="advanced"><summary>单独执行某项功能（高级操作）</summary><div class="advanced-grid"><button class="dark wide" onclick="run('init-workers')">首次使用：初始化全部并行实例登录</button><button onclick="run('scan')">只搜索岗位</button><button onclick="run('communicate')">只执行并行沟通</button><button onclick="run('check')">只检查 HR 回复</button><button class="warn" onclick="run('resume')">单次检查并自动投递</button><button class="dark wide" onclick="run('watch')">持续监控回复与简历邀请</button></div></details></div>
 <p class="notice">自动投递不需要输入联系人，只处理未读回复；明确邀请或符合主动联系规则后才发送，并按岗位匹配通用 / AI / 数据简历。</p></section>
 <section class="card"><div class="statusline"><h2>运行状态</h2><strong id="stage">空闲</strong></div><div class="stats">
 <div class="stat"><b id="total">0</b><span>扫描任务</span></div><div class="stat"><b id="pending">0</b><span>待沟通</span></div><div class="stat"><b id="success">0</b><span>今日成功</span></div><div class="stat"><b id="quota">300</b><span>今日剩余额度</span></div></div>
@@ -46,18 +48,20 @@ HTML = r"""<!doctype html>
 <div class="help-row"><b>当前步骤结束后停止</b><span>不打断正在操作的职位，当前搜索或沟通步骤完成后停止后续步骤。</span></div>
 <div class="help-row"><b>立即中止当前任务</b><span>马上终止当前搜索/沟通/检查子进程，不删除已完成断点；下次启动会从未完成任务继续。</span></div>
 <div class="help-row"><b>只搜索岗位</b><span>更新任务池，不发送消息。页面会显示累计岗位和耗时。</span></div>
-<div class="help-row"><b>只执行串行沟通</b><span>读取最近搜索结果，逐条沟通；每次发送都必须到固定聊天页复核后才算成功。</span></div>
+<div class="help-row"><b>并行沟通实例</b><span>将岗位分片给 1–4 个独立 Chrome 进程；每个进程内部仍串行操作，并使用独立端口、用户目录、断点和日志。</span></div>
+<div class="help-row"><b>初始化全部并行实例登录</b><span>每个独立 Chrome 用户目录首次需要手动登录一次。初始化完成后会持久复用各自会话。</span></div>
+<div class="help-row"><b>只执行沟通</b><span>读取最近搜索结果并按实例数并行；每个实例发送后都必须到自己的固定聊天页复核才算成功。</span></div>
 <div class="help-row"><b>检查 / 自动投递</b><span>检查红色未读数字；只有明确简历邀请或符合主动联系规则时才按岗位发送通用、AI 或数据简历。</span></div></div></div>
 <script>
 let initialized=false;
 async function api(path,options={}){let r=await fetch(path,options);let j=await r.json();if(!r.ok)throw Error(j.error||'请求失败');return j}
 function split(v){return v.split(/[，,\n]/).map(x=>x.trim()).filter(Boolean)}
-async function saveConfig(silent=false){try{await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keywords:split(keywords.value),max_pages:+pages.value,min_salary:+salary.value,greeting:greeting.value.trim(),exclude:split(exclude.value),blacklist:split(blacklist.value)})});if(!silent)alert('配置已同步到后端');return true}catch(e){alert(e.message);return false}}
+async function saveConfig(silent=false){try{await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keywords:split(keywords.value),max_pages:+pages.value,min_salary:+salary.value,workers:+workers.value,greeting:greeting.value.trim(),exclude:split(exclude.value),blacklist:split(blacklist.value)})});if(!silent)alert('配置已同步到后端');return true}catch(e){alert(e.message);return false}}
 async function run(action){try{if(!await saveConfig(true))return;await api('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})})}catch(e){alert(e.message)}}
 async function stopRun(){try{await api('/api/stop',{method:'POST'})}catch(e){alert(e.message)}}
 async function abortRun(){if(!confirm('立即中止当前任务？已成功的断点会保留。'))return;try{await api('/api/abort',{method:'POST'})}catch(e){alert(e.message)}}
 function help(open){document.getElementById('help').classList.toggle('open',open)}
-async function poll(){try{let s=await api('/api/state');badge.textContent=s.running?'运行中':'系统就绪';badge.className='pill '+(s.running?'busy':'ok');stage.textContent=s.stage;total.textContent=s.total;pending.textContent=s.pending;success.textContent=s.success;quota.textContent=s.quota;let box=document.getElementById('log');let atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<40;box.textContent=s.logs.join('\n')||'等待操作…';if(atBottom)box.scrollTop=box.scrollHeight;if(!initialized){keywords.value=s.config.keywords.join('\n');pages.value=s.config.max_pages;salary.value=s.config.min_salary;greeting.value=s.config.greeting;exclude.value=s.config.exclude.join(', ');blacklist.value=s.config.blacklist.join(', ');initialized=true}}catch(e){badge.textContent='连接失败'}setTimeout(poll,1200)}poll();
+async function poll(){try{let s=await api('/api/state');badge.textContent=s.running?'运行中':'系统就绪';badge.className='pill '+(s.running?'busy':'ok');stage.textContent=s.stage;total.textContent=s.total;pending.textContent=s.pending;success.textContent=s.success;quota.textContent=s.quota;let box=document.getElementById('log');let atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<40;box.textContent=s.logs.join('\n')||'等待操作…';if(atBottom)box.scrollTop=box.scrollHeight;if(!initialized){keywords.value=s.config.keywords.join('\n');pages.value=s.config.max_pages;salary.value=s.config.min_salary;workers.value=s.config.workers;greeting.value=s.config.greeting;exclude.value=s.config.exclude.join(', ');blacklist.value=s.config.blacklist.join(', ');initialized=true}}catch(e){badge.textContent='连接失败'}setTimeout(poll,1200)}poll();
 </script></body></html>"""
 
 
@@ -72,6 +76,7 @@ class JobController:
         self.stop_requested = False
         self.abort_requested = False
         self.process: subprocess.Popen[str] | None = None
+        self.processes: dict[str, subprocess.Popen[str]] = {}
 
     def log(self, message: str) -> None:
         stamp = time.strftime("%H:%M:%S")
@@ -81,10 +86,10 @@ class JobController:
     def state(self) -> dict[str, Any]:
         config = load_config(self.config_path)
         tasks = load_tasks(config.search.output_file) if config.search.output_file.exists() else []
-        store = ProgressStore(config.scheduler.progress_file)
-        store.load()
-        pending = store.pending(tasks)
-        success = store.success_count_today()
+        terminal, success = self._combined_progress(config)
+        pending = [task for task in tasks if task.task_id not in terminal]
+        raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
+        workers = int((raw.get("ui") or {}).get("parallel_workers", 2))
         with self.lock:
             return {
                 "running": self.running, "stage": self.stage, "logs": list(self.logs),
@@ -92,10 +97,30 @@ class JobController:
                 "quota": max(0, config.scheduler.daily_success_limit - success),
                 "config": {"keywords": list(config.search.keywords),
                     "max_pages": config.search.max_pages_per_keyword,
+                    "workers": workers,
                     "min_salary": config.search.min_salary_k, "greeting": config.search.greeting,
                     "exclude": list(config.search.exclude_title_keywords),
                     "blacklist": list(config.search.company_blacklist)},
             }
+
+    def _combined_progress(self, config: Any) -> tuple[set[str], int]:
+        paths = [config.scheduler.progress_file]
+        paths.extend((self.root / "data" / "instances").glob("*/progress.json"))
+        terminal: set[str] = set()
+        success = 0
+        for path in paths:
+            store = ProgressStore(path)
+            try:
+                store.load()
+            except Exception as exc:
+                self.log(f"忽略无法读取的实例断点 {path}: {exc}")
+                continue
+            success += store.success_count_today()
+            terminal.update(
+                task_id for task_id, value in store.data.get("tasks", {}).items()
+                if value.get("status") in {"success", "skipped"}
+            )
+        return terminal, success
 
     def start(self, action: str) -> None:
         with self.lock:
@@ -115,14 +140,18 @@ class JobController:
         with self.lock:
             self.stop_requested = True
             self.abort_requested = True
-            process = self.process
-        if process is not None and process.poll() is None:
-            process.terminate()
+            processes = list(self.processes.values())
+            if self.process is not None and self.process not in processes:
+                processes.append(self.process)
+        active = [process for process in processes if process.poll() is None]
+        if active:
+            for process in active:
+                process.terminate()
             self.log("已立即中止当前子任务；已完成断点保留，下次可继续。")
         else:
             self.log("当前没有正在执行的子任务。")
 
-    def _command(self, args: list[str], label: str) -> bool:
+    def _command(self, args: list[str], label: str, process_key: str = "main") -> bool:
         with self.lock:
             self.stage = label
         self.log(f"开始：{label}")
@@ -135,6 +164,7 @@ class JobController:
         )
         with self.lock:
             self.process = process
+            self.processes[process_key] = process
         assert process.stdout is not None
         try:
             for line in process.stdout:
@@ -144,28 +174,119 @@ class JobController:
             with self.lock:
                 if self.process is process:
                     self.process = None
+                self.processes.pop(process_key, None)
         self.log(f"{label}结束，退出码 {code}")
         return code == 0
+
+    def _parallel_workers(self) -> int:
+        raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
+        return max(1, min(4, int((raw.get("ui") or {}).get("parallel_workers", 2))))
+
+    def _prepare_partitions(self, worker_count: int) -> list[tuple[str, Path, int]]:
+        config = load_config(self.config_path)
+        if not config.search.output_file.exists():
+            raise RuntimeError("没有搜索结果，请先搜索岗位")
+        tasks = load_tasks(config.search.output_file)
+        terminal, _ = self._combined_progress(config)
+        partitions: list[list[Any]] = [[] for _ in range(worker_count)]
+        for task in tasks:
+            if task.task_id in terminal:
+                continue
+            bucket = sum(task.task_id.encode("utf-8")) % worker_count
+            partitions[bucket].append(task)
+        result: list[tuple[str, Path, int]] = []
+        for index, part in enumerate(partitions):
+            name = f"worker-{index + 1:02d}"
+            path = self.root / "data" / "instances" / name / "tasks.json"
+            save_tasks(path, part)
+            if part:
+                result.append((name, path, index))
+            self.log(f"{name} 分配 {len(part)} 个待沟通岗位。")
+        return result
+
+    def _parallel_communicate(self) -> bool:
+        worker_count = self._parallel_workers()
+        partitions = self._prepare_partitions(worker_count)
+        if not partitions:
+            self.log("没有待沟通岗位。")
+            return True
+        with self.lock:
+            self.stage = f"{len(partitions)} 个独立实例并行沟通"
+        results: dict[str, bool] = {}
+        threads: list[threading.Thread] = []
+        config = load_config(self.config_path)
+        _, success_today = self._combined_progress(config)
+        remaining_quota = max(0, config.scheduler.daily_success_limit - success_today)
+
+        def run_one(name: str, path: Path, index: int) -> None:
+            worker_store = ProgressStore(self.root / "data" / "instances" / name / "progress.json")
+            worker_store.load()
+            share = remaining_quota // worker_count + (1 if index < remaining_quota % worker_count else 0)
+            worker_limit = worker_store.success_count_today() + share
+            if share <= 0:
+                self.log(f"{name} 今日没有剩余额度，跳过。")
+                results[name] = True
+                return
+            args = ["run", "--tasks", str(path), "--instance", name,
+                    "--port-offset", str(index + 1), "--worker-index", str(index),
+                    "--worker-count", str(worker_count), "--daily-limit", str(worker_limit)]
+            results[name] = self._command(args, f"[{name}] 串行沟通", name)
+
+        for name, path, index in partitions:
+            thread = threading.Thread(target=run_one, args=(name, path, index), daemon=True)
+            thread.start(); threads.append(thread)
+        for thread in threads:
+            thread.join()
+        return all(results.values())
+
+    def _parallel_browser_check(self) -> bool:
+        worker_count = self._parallel_workers()
+        results: dict[str, bool] = {}
+        threads: list[threading.Thread] = []
+
+        def run_one(index: int) -> None:
+            name = f"worker-{index + 1:02d}"
+            args = ["browser-check", "--instance", name, "--port-offset", str(index + 1),
+                    "--worker-index", str(index), "--worker-count", str(worker_count)]
+            results[name] = self._command(args, f"[{name}] 初始化登录", name)
+
+        with self.lock:
+            self.stage = f"初始化 {worker_count} 个独立 Chrome 登录"
+        for index in range(worker_count):
+            thread = threading.Thread(target=run_one, args=(index,), daemon=True)
+            thread.start(); threads.append(thread)
+        for thread in threads:
+            thread.join()
+        return all(results.values())
 
     def _worker(self, action: str) -> None:
         plans = {
             "browser": [(["browser-check"], "检查 Chrome 登录")],
+            "init-workers": [],
             "scan": [(["scan"], "搜索岗位")],
-            "communicate": [(["run"], "串行批量沟通")],
+            "communicate": [],
             "check": [(["chat-check"], "检查 HR 回复")],
             "resume": [(["chat-check", "--send-resume"], "自动匹配并投递简历")],
             "watch": [],
-            "full": [(["scan"], "搜索岗位"), (["run"], "串行批量沟通")],
+            "full": [(["scan"], "搜索岗位")],
         }
         try:
+            proceed = True
+            if action == "init-workers":
+                proceed = self._parallel_browser_check()
             for args, label in plans[action]:
                 with self.lock:
                     if self.stop_requested:
                         break
                 if not self._command(args, label):
                     self.log("当前步骤失败，完整流程已停止。")
+                    proceed = False
                     break
-            if action in {"watch", "full"} and not self.stop_requested:
+            if proceed and action in {"communicate", "full"} and not self.stop_requested:
+                proceed = self._parallel_communicate()
+                if not proceed:
+                    self.log("至少一个沟通实例失败，后续自动监控未启动。")
+            if proceed and action in {"watch", "full"} and not self.stop_requested:
                 while True:
                     with self.lock:
                         if self.stop_requested:
@@ -200,17 +321,21 @@ def _atomic_save_search(config_path: Path, payload: dict[str, Any]) -> None:
         raise ValueError("至少填写一个搜索关键词")
     pages = int(payload.get("max_pages", 0))
     salary = int(payload.get("min_salary", 0))
+    workers = int(payload.get("workers", 0))
     greeting = str(payload.get("greeting") or "").strip()
     if not 1 <= pages <= 50:
         raise ValueError("每个关键词页数必须在 1-50 之间")
     if not 0 <= salary <= 100:
         raise ValueError("最低薪资必须在 0-100K 之间")
+    if not 1 <= workers <= 4:
+        raise ValueError("并行沟通实例数必须在 1-4 之间")
     if not greeting:
         raise ValueError("招呼语不能为空")
     search.update(keywords=[x.strip() for x in keywords], max_pages_per_keyword=pages,
                   min_salary_k=salary, greeting=greeting,
                   exclude_title_keywords=[str(x).strip() for x in payload.get("exclude", []) if str(x).strip()],
                   company_blacklist=[str(x).strip() for x in payload.get("blacklist", []) if str(x).strip()])
+    raw.setdefault("ui", {})["parallel_workers"] = workers
     temp = config_path.with_suffix(".yaml.tmp")
     temp.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
     load_config(temp)
@@ -246,7 +371,7 @@ def run_ui(root: Path, config_path: Path, host: str = "127.0.0.1", port: int = 8
                     _atomic_save_search(config_path, payload); controller.log("搜索设置已同步到 config.yaml")
                 elif path == "/api/action":
                     action = str(payload.get("action") or "")
-                    if action not in {"browser", "scan", "communicate", "check", "resume", "watch", "full"}:
+                    if action not in {"browser", "init-workers", "scan", "communicate", "check", "resume", "watch", "full"}:
                         raise ValueError("未知操作")
                     controller.start(action)
                 elif path == "/api/stop": controller.stop()
