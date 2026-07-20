@@ -94,6 +94,12 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--tasks", type=Path)
     result.add_argument("--keyword", action="append", help="临时覆盖搜索关键词，可重复传入")
     result.add_argument("--max-pages", type=int, help="临时覆盖每个关键词扫描页数")
+    result.add_argument(
+        "--send-resume", action="store_true",
+        help="仅与 chat-check 一起使用，允许处理一条未读会话中的简历发送",
+    )
+    result.add_argument("--contact", default="", help="chat-check 仅处理联系人名称包含此文本的会话")
+    result.add_argument("--max-conversations", type=int, help="chat-check 本次最多打开的未读会话数")
     result.add_argument("--dry-run", action="store_true")
     return result
 
@@ -108,6 +114,12 @@ def main() -> int:
         config = load_config(args.config)
         tasks_path = args.tasks
         tasks = load_tasks(tasks_path) if tasks_path else []
+        if args.command == "run" and not tasks_path:
+            if not config.search.output_file.exists():
+                raise ConfigError(
+                    f"没有扫描结果 {config.search.output_file}；请先执行 scan，或使用 --tasks"
+                )
+            tasks = load_tasks(config.search.output_file)
         store = ProgressStore(config.scheduler.progress_file)
         store.load()
         if args.command == "validate" or args.command is None:
@@ -132,7 +144,7 @@ def main() -> int:
                 print("登录状态检查通过。")
                 return 0
             jobs_tab = session.page.latest_tab
-            if args.command in {"scan", "run"} and not tasks_path:
+            if args.command == "scan":
                 BossTaskExecutor(jobs_tab, config).wait_for_login()
                 search_config = config.search
                 if args.keyword:
@@ -146,8 +158,7 @@ def main() -> int:
                 tasks = jobs_to_tasks(jobs, config)
                 save_tasks(config.search.output_file, tasks)
                 print(f"[SEARCH] 已保存 {len(tasks)} 条任务：{config.search.output_file}")
-                if args.command == "scan":
-                    return 0
+                return 0
             if args.command == "run":
                 placeholders = [
                     task for task in tasks
@@ -179,7 +190,9 @@ def main() -> int:
                     reporter.attention("聊天监控在配置中处于关闭状态。")
                     return 1
                 result = chat_monitor.check(
-                    force=True, allow_refresh=True, allow_resume_send=False
+                    force=True, allow_refresh=True, allow_resume_send=args.send_resume,
+                    target_contact=args.contact,
+                    max_conversations=args.max_conversations,
                 )
                 reporter.summary(
                     f"单次聊天检查结束：未读会话 {result.unread_conversations}，"

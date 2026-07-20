@@ -62,16 +62,16 @@ resume_delivery:
   auto_send_on_explicit_invitation: true
   options:
     - key: "data_analysis"
-      display_name: ""
-      option_index: 0
+      display_name: "数据相关-"
+      option_index: 2
       keywords: ["数据分析", "商业分析", "SQL", "BI", "数据挖掘"]
     - key: "data_operations"
-      display_name: ""
-      option_index: 1
+      display_name: "周成业-浙理工-应数26本-"
+      option_index: 0
       keywords: ["数据运营", "用户运营", "策略运营", "数据评测", "管培生"]
     - key: "ai"
-      display_name: ""
-      option_index: 2
+      display_name: "AI相关-"
+      option_index: 1
       keywords: ["AI", "人工智能", "大模型", "AIGC", "Agent", "产品"]
   deepseek:
     enabled: false

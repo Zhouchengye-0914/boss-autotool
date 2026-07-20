@@ -20,7 +20,15 @@ D:\Python3.10.1\python.exe .\启动.py run --tasks .\data\tasks.json
 
 `启动.py` 只是安全入口，全部参数直接交给 `main.py`，不会维护第二套业务逻辑。原 `main.py` 命令继续兼容。
 
-`scan` 使用与 `boss-tool` 相同的 `joblist` 网络监听方式，按 `config.yaml` 中的关键词逐页滚动采集并写入 `data/tasks.scanned.json`，不会沟通。`run` 不传 `--tasks` 时会先执行同样的搜索，再把筛选结果交给串行调度器；传入 `--tasks` 时才执行指定文件。包含 `EXAMPLE` 的占位任务会被真实运行拒绝。
+`scan` 使用与 `boss-tool` 相同的 `joblist` 网络监听方式，按 `config.yaml` 中的关键词逐页滚动采集并写入 `data/tasks.scanned.json`，不会沟通，并持续显示页数、累计岗位和耗时。
+
+`run` 与搜索完全分离：不传 `--tasks` 时只读取最近一次的 `data/tasks.scanned.json`；该文件不存在时直接停止并提示先运行 `scan`，不会自动搜索。传入 `--tasks` 时只执行指定文件。包含 `EXAMPLE` 的占位任务会被真实运行拒绝。
+
+一次性允许聊天检查处理简历发送：
+
+```powershell
+python 启动.py chat-check --send-resume
+```
 
 ## 开始前
 

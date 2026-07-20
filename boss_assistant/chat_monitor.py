@@ -143,7 +143,8 @@ class ChatMonitor:
                 if not self._positive_rect(badge):
                     continue
                 item = badge
-                for _ in range(5):
+                fallback = None
+                for _ in range(7):
                     try:
                         parent = item.parent()
                     except Exception:
@@ -152,8 +153,14 @@ class ChatMonitor:
                         break
                     item = parent
                     klass = str(item.attr("class") or "").lower()
-                    if any(word in klass for word in ("conversation", "friend", "chat-list")):
+                    if "friend-content-warp" in klass:
                         break
+                    if any(word in klass for word in ("conversation-item", "chat-list-item")):
+                        break
+                    if "friend-content" in klass:
+                        fallback = item
+                else:
+                    item = fallback or item
                 if not self._positive_rect(item):
                     continue
                 identity = str(item.attr("data-id") or item.attr("data-v-uid") or item.text or "")
@@ -165,22 +172,43 @@ class ChatMonitor:
     @staticmethod
     def _conversation_meta(item: Any) -> tuple[str, str]:
         text = (getattr(item, "text", "") or "").strip()
+        contact_name = ""
+        for locator in selectors.CHAT_CONTACT_NAME:
+            try:
+                name_element = item.ele(locator, timeout=0.2)
+                contact_name = (name_element.text or "").strip() if name_element else ""
+            except Exception:
+                continue
+            if contact_name:
+                break
+        contact_name = contact_name.splitlines()[0].strip() if contact_name else (
+            text.splitlines()[0].strip() if text else "未知联系人"
+        )
         conversation_id = str(
             item.attr("data-id") or item.attr("data-v-uid") or item.attr("data-user-id") or ""
         ).strip()
         if not conversation_id:
-            conversation_id = re.sub(r"\s+", " ", text)[:160]
-        contact_name = text.splitlines()[0].strip() if text else "未知联系人"
+            # 列表时间和最后一条消息会持续变化，不能参与幂等键。
+            stable_contact = re.sub(r"\s+", " ", contact_name)[:160]
+            conversation_id = f"contact:{stable_contact}"
         return conversation_id, contact_name
 
     def _job_meta(self) -> tuple[str, str]:
+        try:
+            title = self.tab.ele("css:.chat-position-content .position-name", timeout=0.5)
+            title_text = (title.text or "").strip() if title else ""
+            if title_text:
+                return title_text, ""
+        except Exception:
+            pass
         for locator in selectors.CHAT_JOB_INFO:
             try:
                 element = self.tab.ele(locator, timeout=0.5)
                 text = (element.text or "").strip() if element else ""
                 if text:
                     parts = [part.strip() for part in text.splitlines() if part.strip()]
-                    return (parts[0] if parts else "", parts[1] if len(parts) > 1 else "")
+                    company = parts[1] if len(parts) > 1 and parts[1] != "查看职位" else ""
+                    return (parts[0] if parts else "", company)
             except Exception:
                 continue
         return "", ""
@@ -219,7 +247,8 @@ class ChatMonitor:
 
     def check(
         self, *, force: bool = False, allow_refresh: bool = True,
-        allow_resume_send: bool = True,
+        allow_resume_send: bool = True, target_contact: str = "",
+        max_conversations: int | None = None,
     ) -> ChatCheckResult:
         now = self.clock()
         if not force and now < self.next_poll_at:
@@ -229,6 +258,13 @@ class ChatMonitor:
             result.refreshed = self._ensure_chat_page(allow_refresh)
             unread_items = self._unread_items()
             result.unread_conversations = len(unread_items)
+            if target_contact:
+                unread_items = [
+                    item for item in unread_items
+                    if target_contact in self._conversation_meta(item)[1]
+                ]
+            if max_conversations is not None:
+                unread_items = unread_items[:max(0, max_conversations)]
             for item in unread_items:
                 conversation_id, contact_name = self._conversation_meta(item)
                 human_click(self.tab, item, rng=self.rng, sleeper=self.sleeper)

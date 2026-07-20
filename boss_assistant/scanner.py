@@ -90,6 +90,12 @@ class BossJobScanner:
         return []
 
     def scan(self) -> list[dict[str, Any]]:
+        started_at = time.monotonic()
+        maximum_pages = len(self.config.keywords) * self.config.max_pages_per_keyword
+        self.reporter(
+            f"[SEARCH] 计划：{len(self.config.keywords)} 个关键词，最多 {maximum_pages} 页；"
+            f"每次滚动等待 {self.config.scroll_min_seconds:.0f}-{self.config.scroll_max_seconds:.0f} 秒"
+        )
         collected: dict[str, dict[str, Any]] = {}
         for query in self.config.keywords:
             self.reporter(f"[SEARCH] 关键词：{query}")
@@ -109,13 +115,20 @@ class BossJobScanner:
                     collected.setdefault(job["job_id"], job)
                 page_number += 1
                 self.reporter(
-                    f"[SEARCH] {query} 第 {page_number} 页，新增 {len(collected) - before}，累计 {len(collected)}"
+                    f"[SEARCH] {query} 第 {page_number}/{self.config.max_pages_per_keyword} 页，"
+                    f"新增 {len(collected) - before}，累计 {len(collected)}，"
+                    f"耗时 {(time.monotonic() - started_at) / 60:.1f} 分钟"
                 )
                 if page_number >= self.config.max_pages_per_keyword:
                     break
                 self.page.run_js("window.scrollTo(0, document.body.scrollHeight);")
                 self.sleeper(self.rng.uniform(self.config.scroll_min_seconds, self.config.scroll_max_seconds))
-        return self.filter(list(collected.values()))
+        result = self.filter(list(collected.values()))
+        self.reporter(
+            f"[SEARCH] 搜索完成：{len(result)} 条候选，总耗时 "
+            f"{(time.monotonic() - started_at) / 60:.1f} 分钟"
+        )
+        return result
 
     def filter(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         result = []
