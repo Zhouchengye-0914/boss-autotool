@@ -1,0 +1,81 @@
+browser:
+  executable_path: "C:/Program Files/Google/Chrome/Application/chrome.exe"
+  profile_path: "./data/browser_profiles/chrome"
+  state_file: "./data/browser_state.json"
+  debug_port: 9223
+  page_load_timeout: 30
+  element_timeout: 10
+  login_check_interval: 5
+  user_agents:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
+
+scheduler:
+  daily_success_limit: 300
+  max_retries: 3
+  tasks_file: "./data/tasks.example.json"
+  progress_file: "./data/progress.json"
+
+search:
+  city_code: "101210100"
+  keywords: ["数据分析", "管培生", "数据运营", "AI产品", "AI运营"]
+  max_pages_per_keyword: 5
+  listen_timeout_seconds: 15
+  scroll_min_seconds: 5
+  scroll_max_seconds: 10
+  min_salary_k: 8
+  exclude_title_keywords: ["销售", "电话客服", "主播"]
+  company_blacklist: []
+  greeting: "您好，我是26届本科应届生，具备Python、SQL、数据分析及AI应用项目经验，对该岗位很感兴趣，希望有机会进一步沟通，谢谢！"
+  output_file: "./data/tasks.scanned.json"
+
+pacing:
+  min_wait_seconds: 3
+  max_wait_seconds: 15
+  batch_size: 20
+  batch_min_rest_seconds: 30
+  batch_max_rest_seconds: 90
+  long_pause_probability: 0.1
+  long_pause_min_seconds: 60
+  long_pause_max_seconds: 180
+
+output:
+  result_csv: "./logs/operation_results.csv"
+  error_csv: "./logs/error_log.csv"
+  screenshots_dir: "./screenshots"
+  progress_report_interval_seconds: 3600
+
+chat_monitor:
+  enabled: true
+  min_poll_seconds: 60
+  max_poll_seconds: 300
+  refresh_if_stale_seconds: 180
+  check_after_each_greeting: true
+  max_conversations_per_cycle: 10
+
+storage:
+  database_path: "./data/boss_assistant.db"
+  reports_dir: "./reports"
+
+resume_delivery:
+  auto_send_on_proactive_contact: true
+  auto_send_on_explicit_invitation: true
+  options:
+    - key: "data_analysis"
+      display_name: ""
+      option_index: 0
+      keywords: ["数据分析", "商业分析", "SQL", "BI", "数据挖掘"]
+    - key: "data_operations"
+      display_name: ""
+      option_index: 1
+      keywords: ["数据运营", "用户运营", "策略运营", "数据评测", "管培生"]
+    - key: "ai"
+      display_name: ""
+      option_index: 2
+      keywords: ["AI", "人工智能", "大模型", "AIGC", "Agent", "产品"]
+  deepseek:
+    enabled: false
+    endpoint: "https://api.deepseek.com/chat/completions"
+    model: "deepseek-chat"
+    api_key_env: "DEEPSEEK_API_KEY"
+    timeout_seconds: 20

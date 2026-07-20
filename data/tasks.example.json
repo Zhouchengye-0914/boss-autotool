@@ -1,0 +1,18 @@
+[
+  {
+    "task_id": "example-communication-001",
+    "job_url": "https://www.zhipin.com/job_detail/EXAMPLE_JOB_ID.html",
+    "job_id": "EXAMPLE_JOB_ID",
+    "greeting": "您好，我对这个职位很感兴趣，希望进一步沟通。",
+    "resume_name": "我的在线简历",
+    "operation_type": "communication"
+  },
+  {
+    "task_id": "example-application-002",
+    "job_url": "https://www.zhipin.com/job_detail/EXAMPLE_JOB_ID_2.html",
+    "job_id": "EXAMPLE_JOB_ID_2",
+    "greeting": "您好，我的经历与岗位要求较为匹配，期待您的回复。",
+    "resume_name": "我的在线简历",
+    "operation_type": "application"
+  }
+]
