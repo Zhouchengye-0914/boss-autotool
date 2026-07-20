@@ -4,11 +4,12 @@
 
 ## 统一启动入口
 
-推荐使用 `启动.py`。不带参数时只显示当前状态，不会打开 Chrome 或执行沟通：
+推荐使用 `启动.py`。不带参数时会打开只监听本机的 Web 控制台，不会自动执行沟通：
 
 ```powershell
 cd D:\projects\boss-job-assistant
 D:\Python3.10.1\python.exe .\启动.py
+D:\Python3.10.1\python.exe .\启动.py ui
 D:\Python3.10.1\python.exe .\启动.py validate
 D:\Python3.10.1\python.exe .\启动.py --dry-run
 D:\Python3.10.1\python.exe .\启动.py browser-check
@@ -17,6 +18,8 @@ D:\Python3.10.1\python.exe .\启动.py scan
 D:\Python3.10.1\python.exe .\启动.py scan --keyword 数据分析 --max-pages 1
 D:\Python3.10.1\python.exe .\启动.py run --tasks .\data\tasks.json
 ```
+
+控制台地址为 `http://127.0.0.1:8765`。可以直接编辑搜索词、页数、最低薪资、排除词和招呼语，并分别执行搜索、串行沟通、回复检查、简历投递或一键完整流程。完整流程会在沟通结束后以随机 1–5 分钟间隔持续检查 HR 回复，直到在界面请求停止。
 
 `启动.py` 只是安全入口，全部参数直接交给 `main.py`，不会维护第二套业务逻辑。原 `main.py` 命令继续兼容。
 

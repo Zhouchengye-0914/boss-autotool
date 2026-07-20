@@ -19,6 +19,7 @@ from boss_assistant.records import RecordStore
 from boss_assistant.monitor import LayeredReporter
 from boss_assistant.daily_report import DailyReportGenerator
 from boss_assistant.scanner import BossJobScanner, jobs_to_tasks, save_tasks
+from boss_assistant.ui import run_ui
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = ROOT / "config.yaml"
@@ -88,7 +89,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="BOSS 直聘 Chrome 自动化助手")
     result.add_argument(
         "command", nargs="?",
-        choices=["validate", "browser-check", "chat-check", "scan", "run", "status", "environment-check"],
+        choices=["ui", "validate", "browser-check", "chat-check", "scan", "run", "status", "environment-check"],
     )
     result.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     result.add_argument("--tasks", type=Path)
@@ -107,6 +108,8 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     try:
+        if args.command == "ui":
+            return run_ui(ROOT, args.config.resolve())
         if args.command == "environment-check":
             return 0 if environment_check() else 1
         if args.dry_run:
