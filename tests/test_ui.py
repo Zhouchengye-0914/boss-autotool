@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from boss_assistant.config import load_config
-from boss_assistant.ui import _atomic_save_search
+from boss_assistant.ui import JobController, _atomic_save_search
 
 
 class UiConfigTests(unittest.TestCase):
@@ -31,3 +31,16 @@ class UiConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _atomic_save_search(target, {"keywords": [], "max_pages": 2,
                                              "min_salary": 8, "greeting": "hello"})
+
+    def test_abort_terminates_active_child(self):
+        class FakeProcess:
+            def __init__(self): self.terminated = False
+            def poll(self): return None
+            def terminate(self): self.terminated = True
+
+        controller = JobController(Path.cwd(), Path("config.yaml"))
+        process = FakeProcess()
+        controller.process = process
+        controller.abort()
+        self.assertTrue(process.terminated)
+        self.assertTrue(controller.stop_requested)

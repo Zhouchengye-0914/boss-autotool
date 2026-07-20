@@ -216,6 +216,22 @@ def main() -> int:
                     reporter.status(f"任务 {task.task_id} 已完成，检查聊天列表同步状态。")
                     chat_monitor.check(force=True, allow_refresh=False)
 
+            def verify_success(task, result):
+                if chat_monitor is None or task.operation_type.value != "communication":
+                    return result
+                confirmed, reason = chat_monitor.verify_greeting_sent(task)
+                if confirmed:
+                    result.reason = reason
+                    return result
+                return type(result)(
+                    status=type(result.status).FAILED,
+                    job_name=result.job_name,
+                    company=result.company,
+                    reason=reason,
+                    attempt=result.attempt,
+                    retryable=True,
+                )
+
             scheduler = TaskScheduler(
                 config,
                 store,
@@ -224,6 +240,7 @@ def main() -> int:
                 executor.execute,
                 before_task=before_task,
                 after_task=after_task,
+                verify_success=verify_success,
             )
             final_state = scheduler.run(tasks)
             report_md, _ = DailyReportGenerator(

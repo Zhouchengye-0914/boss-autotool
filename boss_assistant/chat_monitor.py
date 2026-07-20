@@ -245,6 +245,64 @@ class ChatMonitor:
             )
         return records
 
+    @staticmethod
+    def _compact(text: str) -> str:
+        return re.sub(r"\s+", "", text or "")
+
+    def verify_greeting_sent(self, task: Any) -> tuple[bool, str]:
+        """刷新固定聊天页，并确认本次招呼语已进入己方消息气泡。"""
+        self._activate()
+        try:
+            self.tab.refresh()
+            self.sleeper(self.rng.uniform(1.5, 3.0))
+            self.last_refresh_at = self.clock()
+        except Exception as exc:
+            return False, f"固定聊天页刷新失败: {exc}"
+        items: list[Any] = []
+        for locator in selectors.CHAT_CONVERSATION_ITEMS:
+            try:
+                items = [item for item in self.tab.eles(locator, timeout=1) if self._positive_rect(item)]
+            except Exception:
+                continue
+            if items:
+                break
+        company = str(getattr(task, "company", "") or "").strip()
+        title = str(getattr(task, "job_title", "") or "").strip()
+        candidates = [item for item in items if company and company in (item.text or "")]
+        if not candidates:
+            # 刚建立/更新的会话通常位于列表首部；最多核对前五个，避免遍历整页。
+            candidates = items[:5]
+        expected = self._compact(str(getattr(task, "greeting", "") or ""))
+        for item in candidates[:5]:
+            try:
+                human_click(self.tab, item, rng=self.rng, sleeper=self.sleeper)
+                self.sleeper(self.rng.uniform(0.5, 1.0))
+            except Exception:
+                continue
+            current_title, _ = self._job_meta()
+            if title and current_title and self._compact(title) not in self._compact(current_title):
+                continue
+            try:
+                bubbles = self.tab.eles("css:.message-item.item-myself", timeout=1)
+            except Exception:
+                bubbles = []
+            if any(expected and expected in self._compact(getattr(bubble, "text", "") or "")
+                   for bubble in bubbles):
+                return True, "固定聊天页已确认招呼语进入己方消息记录"
+            input_empty = False
+            for locator in selectors.GREETING_INPUT:
+                try:
+                    field = self.tab.ele(locator, timeout=0.2)
+                    if field and self._positive_rect(field):
+                        value = str(field.attr("value") or getattr(field, "text", "") or "").strip()
+                        input_empty = not value
+                        break
+                except Exception:
+                    continue
+            if input_empty:
+                return False, "固定聊天页存在空输入框，但未找到本次己方消息，判定未发送"
+        return False, "固定聊天页未找到与岗位匹配的已发送招呼语"
+
     def check(
         self, *, force: bool = False, allow_refresh: bool = True,
         allow_resume_send: bool = True, target_contact: str = "",
