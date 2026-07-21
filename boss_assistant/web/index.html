@@ -1,0 +1,23 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BOSS 求职助手</title><link rel="stylesheet" href="/assets/style.css"></head><body>
+<aside><div class="brand">BOSS 求职助手<small>清晰、可恢复、可审计</small></div><nav>
+<button class="active" data-view="home">概览</button><button data-view="search">搜索与匹配</button>
+<button data-view="chat">沟通与 AI</button><button data-view="data">数据与恢复</button>
+</nav><button class="help" onclick="showHelp()">？ 功能说明</button></aside>
+<main><header><div><h1 id="title">今日概览</h1><p id="subtitle">按推荐顺序完成工作，也可以随时安全停止。</p></div><span id="badge">连接中</span></header>
+<section id="home" class="view active"><div id="interview" class="alert hidden">检测到面试相关消息，请在手机端人工接管，系统不会自动确认。</div>
+<div class="cards"><article class="hero"><label>当前状态</label><h2 id="stage">空闲</h2><p id="recoveryText">没有待恢复任务</p><div class="buttons"><button class="primary" onclick="run('full')">一键开始完整流程</button><button id="resumeBtn" class="accent hidden" onclick="resumeRun()">继续上次任务</button><button class="danger" onclick="abortRun()">立即停止</button></div></article>
+<article><h3>今日进度</h3><div class="stats"><div><b id="total">0</b><span>岗位</span></div><div><b id="pending">0</b><span>待沟通</span></div><div><b id="success">0</b><span>已成功</span></div><div><b id="quota">300</b><span>剩余额度</span></div></div></article></div>
+<article><h3>运行日志</h3><pre id="log">等待操作…</pre></article></section>
+<section id="search" class="view"><article><h2>搜索与匹配</h2><p>关键词可以留空，此时使用 BOSS 个性化推荐流；搜索结果自动保存到岗位数据库。</p><div class="form">
+<label class="wide">搜索关键词<textarea id="keywords" placeholder="每行一个；留空也能搜索"></textarea><small>简历推荐：<span id="suggestions">读取中…</span> <button class="link" onclick="useSuggestions()">填入</button></small></label>
+<label>每个关键词最多页数<input id="pages" type="number" min="1" max="50"></label><label>最低薪资 K<input id="salary" type="number" min="0" max="100"></label>
+<label class="wide">排除职位词<input id="exclude" placeholder="逗号分隔"></label><label class="wide">公司黑名单<input id="blacklist" placeholder="逗号分隔"></label></div>
+<div class="buttons"><button onclick="run('profile')">同步在线简历</button><button class="primary" onclick="run('scan')">只搜索岗位</button></div></article></section>
+<section id="chat" class="view"><article><h2>沟通与 AI</h2><p>多个实例相互隔离，每个实例内部始终串行；固定聊天页负责复核空消息和 HR 回复。</p><div class="form">
+<label>独立实例数（1–4）<input id="workers" type="number" min="1" max="4"></label><label>DeepSeek 自动判断<span class="switch"><input id="deepseekEnabled" type="checkbox">启用</span></label>
+<label class="wide">默认招呼语<textarea id="greeting"></textarea></label><label>通用简历匹配词<input id="resumeGeneral"></label><label>AI 简历匹配词<input id="resumeAi"></label><label>数据简历匹配词<input id="resumeData"></label>
+<label class="wide">求职期望和回复限制<textarea id="preferences"></textarea></label></div><div class="buttons"><button onclick="run('init-workers')">初始化实例登录</button><button class="primary" onclick="run('communicate')">只沟通</button><button onclick="run('check')">检查一次回复</button><button onclick="run('watch')">持续监听</button></div></article></section>
+<section id="data" class="view"><article><h2>数据与恢复</h2><p>关闭程序不会删除数据。搜索页断点、沟通任务断点和工作流状态分别原子保存。</p><div id="paths" class="pathgrid"></div><div class="buttons"><button onclick="saveConfig()">保存全部设置</button><button onclick="stopRun()">当前步骤后停止</button><button class="danger" onclick="abortRun()">立即停止并保留断点</button></div></article></section>
+</main><dialog id="help"><h2>建议使用顺序</h2><ol><li>首次使用先同步简历并初始化浏览器登录。</li><li>在“搜索与匹配”中搜索并保存岗位。</li><li>在“沟通与 AI”中沟通或持续监听。</li><li>异常关闭后回到概览，点击“继续上次任务”。</li></ol><button onclick="help.close()">知道了</button></dialog>
+<script src="/assets/app.js"></script></body></html>

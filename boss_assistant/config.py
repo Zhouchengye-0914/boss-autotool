@@ -65,6 +65,9 @@ class ChatConfig:
 class StorageConfig:
     database_path: Path
     reports_dir: Path
+    jobs_database_path: Path
+    communications_database_path: Path
+    chat_database_path: Path
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,7 @@ class ResumeConfig:
     auto_send_on_explicit_invitation: bool
     options: tuple[ResumeOptionConfig, ...]
     deepseek: DeepSeekConfig
+    conversation_preferences: str
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,8 @@ class SearchConfig:
     company_blacklist: tuple[str, ...]
     greeting: str
     output_file: Path
+    match_threshold: float
+    recommendation_limit: int
 
 
 @dataclass(frozen=True)
@@ -163,16 +169,20 @@ def load_config(path: str | Path) -> AppConfig:
     storage = raw.get("storage", {
         "database_path": "./data/boss_assistant.db",
         "reports_dir": "./reports",
+        "jobs_database_path": "./data/jobs.db",
+        "communications_database_path": "./data/communications.db",
+        "chat_database_path": "./data/chat.db",
     })
     resume = raw.get("resume_delivery", {
         "auto_send_on_proactive_contact": False,
         "auto_send_on_explicit_invitation": False,
         "options": [
-            {"key": "data_analysis", "display_name": "", "option_index": 0, "keywords": ["数据分析"]},
-            {"key": "data_operations", "display_name": "", "option_index": 1, "keywords": ["数据运营"]},
-            {"key": "ai", "display_name": "", "option_index": 2, "keywords": ["AI"]},
+            {"key": "general", "display_name": "", "option_index": 0, "keywords": ["数据运营"]},
+            {"key": "ai", "display_name": "", "option_index": 1, "keywords": ["AI"]},
+            {"key": "data", "display_name": "", "option_index": 2, "keywords": ["数据分析"]},
         ],
         "deepseek": {"enabled": False},
+        "conversation_preferences": "",
     })
     search = raw.get("search", {
         "city_code": "101210100", "keywords": ["数据分析"],
@@ -181,6 +191,8 @@ def load_config(path: str | Path) -> AppConfig:
         "min_salary_k": 8, "exclude_title_keywords": [], "company_blacklist": [],
         "greeting": "您好，我对该岗位很感兴趣，希望进一步沟通。",
         "output_file": "./data/tasks.scanned.json",
+        "match_threshold": 58,
+        "recommendation_limit": 12,
     })
     if not all(isinstance(v, dict) for v in (browser, scheduler, pacing, output, chat, storage, resume, search)):
         raise ConfigError("browser/scheduler/pacing/output 必须是对象")
@@ -232,10 +244,10 @@ def load_config(path: str | Path) -> AppConfig:
     if not isinstance(deepseek_raw, dict):
         raise ConfigError("resume_delivery.deepseek 必须是对象")
     search_keywords = search.get("keywords", [])
-    if not isinstance(search_keywords, list) or not search_keywords or not all(
+    if not isinstance(search_keywords, list) or not all(
         isinstance(item, str) and item.strip() for item in search_keywords
     ):
-        raise ConfigError("search.keywords 必须是非空字符串列表")
+        raise ConfigError("search.keywords 必须是字符串列表，可为空")
     scroll_min = _number(search, "scroll_min_seconds")
     scroll_max = _number(search, "scroll_max_seconds")
     if scroll_max < scroll_min:
@@ -290,18 +302,29 @@ def load_config(path: str | Path) -> AppConfig:
         storage=StorageConfig(
             database_path=_path(root, storage.get("database_path"), "database_path"),
             reports_dir=_path(root, storage.get("reports_dir"), "reports_dir"),
+            jobs_database_path=_path(
+                root, storage.get("jobs_database_path", "./data/jobs.db"), "jobs_database_path"
+            ),
+            communications_database_path=_path(
+                root, storage.get("communications_database_path", "./data/communications.db"),
+                "communications_database_path",
+            ),
+            chat_database_path=_path(
+                root, storage.get("chat_database_path", "./data/chat.db"), "chat_database_path"
+            ),
         ),
         resume=ResumeConfig(
             auto_send_on_proactive_contact=bool(resume.get("auto_send_on_proactive_contact", True)),
             auto_send_on_explicit_invitation=bool(resume.get("auto_send_on_explicit_invitation", True)),
             options=tuple(resume_options),
-            deepseek=DeepSeekConfig(
+        deepseek=DeepSeekConfig(
                 enabled=bool(deepseek_raw.get("enabled", False)),
                 endpoint=str(deepseek_raw.get("endpoint") or "https://api.deepseek.com/chat/completions"),
                 model=str(deepseek_raw.get("model") or "deepseek-chat"),
                 api_key_env=str(deepseek_raw.get("api_key_env") or "DEEPSEEK_API_KEY"),
                 timeout_seconds=float(deepseek_raw.get("timeout_seconds", 20)),
             ),
+            conversation_preferences=str(resume.get("conversation_preferences") or "").strip(),
         ),
         search=SearchConfig(
             city_code=str(search.get("city_code") or "101210100"),
@@ -315,5 +338,7 @@ def load_config(path: str | Path) -> AppConfig:
             company_blacklist=tuple(str(x) for x in search.get("company_blacklist", [])),
             greeting=str(search.get("greeting") or "").strip(),
             output_file=_path(root, search.get("output_file"), "search.output_file"),
+            match_threshold=_number(search, "match_threshold"),
+            recommendation_limit=int(_number(search, "recommendation_limit", positive=True)),
         ),
     )

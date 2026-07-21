@@ -2,12 +2,17 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 data/progress.json
+data/workflow_state.json
+data/scan_checkpoint.json
 data/browser_state.json
 data/browser_profiles/
+data/instances/
 logs/*.csv
+logs/instances/
 screenshots/*.png
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/boss_site_probe.json
 reports/daily/*
 .env

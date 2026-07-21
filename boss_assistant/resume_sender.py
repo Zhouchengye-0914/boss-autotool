@@ -67,8 +67,18 @@ class ChatResumeSender:
         if confirm is None:
             return ResumeSendResult(False, "未找到唯一确认发送按钮", texts)
         human_click(self.tab, confirm, rng=self.rng, sleeper=self.sleeper)
-        self.sleeper(self.rng.uniform(1, 2))
-        # 确认按钮消失且弹窗选项不再可见，才判定动作完成。
-        if find_unique(self.tab, selectors.CHAT_RESUME_CONFIRM, timeout=0.5) is not None:
-            return ResumeSendResult(False, "点击后简历弹窗仍未关闭，结果未确认", texts)
-        return ResumeSendResult(True, "附件简历已发送", texts)
+        # BOSS 的弹窗关闭和系统消息写入存在异步延迟；最多等待 8 秒，避免
+        # 因过早检查而把已送达误判为失败，进而在重试时重复投递。
+        for _ in range(16):
+            self.sleeper(0.5)
+            if find_unique(self.tab, selectors.CHAT_RESUME_CONFIRM, timeout=0.2) is None:
+                return ResumeSendResult(True, "附件简历已发送", texts)
+            try:
+                sent = self.tab.ele(
+                    "xpath://*[contains(normalize-space(.), '已发送给Boss')]", timeout=0.2
+                )
+                if sent and self._visible(sent):
+                    return ResumeSendResult(True, "附件简历已发送", texts)
+            except Exception:
+                pass
+        return ResumeSendResult(False, "发送后 8 秒内结果仍未确认；重试前须先检查会话", texts)

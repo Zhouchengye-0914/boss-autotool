@@ -56,6 +56,8 @@ CLOSED_MARKERS = ("text:职位已关闭", "text:职位不存在", "text:停止�
 # 聊天列表只处理带可见红点/数字的会话。不同版本的 BOSS 页面类名可能变化，
 # 因此保留多个候选，但 ChatMonitor 仍会检查正尺寸并向上定位会话容器。
 CHAT_UNREAD_BADGES = (
+    "css:.user-list-content .friend-content-warp .notice-badge",
+    "css:.friend-content-warp .notice-badge",
     "css:.conversation-item [class*='unread']",
     "css:.chat-list-item [class*='unread']",
     "css:[class*='friend'] [class*='badge']",
@@ -63,10 +65,17 @@ CHAT_UNREAD_BADGES = (
     "css:[class*='item'] .red-dot",
 )
 CHAT_CONVERSATION_ITEMS = (
+    "css:.friend-content-warp",
+    "css:.friend-content",
     "css:.conversation-item",
     "css:.chat-list-item",
     "css:[class*='friend-item']",
     "css:[class*='conversation-item']",
+)
+CHAT_CONTACT_NAME = (
+    "css:.title-box",
+    "css:[class*='name-box']",
+    "css:[class*='contact-name']",
 )
 CHAT_MESSAGE_ITEMS = (
     "css:.message-item",
@@ -75,19 +84,27 @@ CHAT_MESSAGE_ITEMS = (
     "css:[class*='message-content']",
 )
 CHAT_JOB_INFO = (
+    "css:.chat-position-content",
+    "css:.position-content",
+    "css:[class*='position-card']",
     "css:[class*='job-info']",
     "css:[class*='position-info']",
     "css:[class*='job-card']",
 )
 CHAT_RESUME_BUTTON = (
+    "xpath://div[contains(concat(' ', normalize-space(@class), ' '), ' toolbar-btn-content ') and normalize-space(.)='发简历']",
     "xpath://*[self::button or self::a or self::span][normalize-space(.)='发简历']",
     "css:.btn-resume", "css:[class*='send-resume']", "css:[class*='resume-btn']",
 )
 CHAT_RESUME_OPTIONS = (
+    "css:.choose-resume-dialog .resume-list > *",
+    "css:.choose-resume-dialog .resume-name",
     "css:[class*='resume-item']", "css:[class*='resume-card']",
     "css:.dialog-resume-item", "css:[class*='resume-list'] > *",
 )
 CHAT_RESUME_CONFIRM = (
+    "css:.choose-resume-dialog .btn-confirm:not(.disabled)",
+    "xpath://div[contains(@class, 'choose-resume-dialog')]//button[normalize-space(.)='发送' and not(contains(@class, 'disabled'))]",
     "xpath://*[self::button or self::a or self::span][normalize-space(.)='发送']",
     "xpath://*[self::button or self::a or self::span][normalize-space(.)='确定']",
 )

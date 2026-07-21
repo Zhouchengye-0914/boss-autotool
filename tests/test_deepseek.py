@@ -23,6 +23,18 @@ class ResumeMatcherTests(unittest.TestCase):
         selected = choose_resume("数据分析 SQL", self.options, self.matcher)
         self.assertEqual(selected.key, "data")
 
+    def test_conversation_json_is_constrained(self):
+        matcher = DeepSeekResumeMatcher(
+            DeepSeekConfig(True, "https://example.com", "model", "TEST_KEY", 1)
+        )
+        matcher._chat = lambda *args, **kwargs: (
+            '{"action":"reply","resume_key":"","reply":"您好，可以进一步了解岗位职责。",'
+            '"reason":"HR提问"}'
+        )
+        decision = matcher.conversation_decision("profile", "job", "chat", "preferences")
+        self.assertEqual(decision["action"], "reply")
+        self.assertLessEqual(len(decision["reply"]), 80)
+
 
 if __name__ == "__main__":
     unittest.main()
