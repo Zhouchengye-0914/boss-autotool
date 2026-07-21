@@ -12,7 +12,7 @@ browser:
   - Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)
     Chrome/149.0.0.0 Safari/537.36
 scheduler:
-  daily_success_limit: 300
+  daily_success_limit: 275
   max_retries: 3
   tasks_file: ./data/tasks.example.json
   progress_file: ./data/progress.json

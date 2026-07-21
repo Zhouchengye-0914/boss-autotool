@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -67,3 +68,19 @@ class UiConfigTests(unittest.TestCase):
                 _atomic_save_search(target, {"keywords": ["????"], "max_pages": 1,
                                              "min_salary": 0, "workers": 1, "greeting": "???"})
             self.assertEqual(original, target.read_text(encoding="utf-8"))
+
+    def test_independent_modules_can_start_together(self):
+        source = Path(__file__).resolve().parents[1] / "config.yaml"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config.yaml"
+            config.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            controller = JobController(root, config)
+            release = threading.Event()
+            controller._worker = lambda _action: release.wait(1)
+            controller.start("scan")
+            controller.start("watch")
+            self.assertEqual({"scan", "watch"}, controller.active_actions)
+            with self.assertRaisesRegex(RuntimeError, "独占"):
+                controller.start("full")
+            release.set()
