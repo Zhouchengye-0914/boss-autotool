@@ -110,7 +110,13 @@ class BossJobScanner:
         collected: dict[str, dict[str, Any]] = {}
         completed_queries: set[str] = set()
         if self.checkpoint:
-            self.checkpoint.load(tuple(queries))
+            self.checkpoint.load({
+                "queries": list(queries), "city_code": self.config.city_code,
+                "max_pages": self.config.max_pages_per_keyword,
+                "minimum_salary_k": self.config.min_salary_k,
+                "excluded_titles": list(self.config.exclude_title_keywords),
+                "company_blacklist": list(self.config.company_blacklist),
+            })
             collected.update(self.checkpoint.data["jobs"])
             completed_queries.update(self.checkpoint.data["completed_queries"])
             if collected:
@@ -127,9 +133,15 @@ class BossJobScanner:
             )
             self.page.get(url)
             page_number = 0
+            query_completed = False
             while page_number < self.config.max_pages_per_keyword:
                 jobs = self._packet_jobs(query)
                 if not jobs:
+                    if self.checkpoint:
+                        self.checkpoint.interrupt_query(
+                            query, page_number, "未收到 joblist 数据；保留为可恢复状态"
+                        )
+                    self.reporter(f"[SEARCH] {query or '推荐流'} 未收到数据，本关键词保留断点")
                     break
                 before = len(collected)
                 for job in jobs:
@@ -143,12 +155,13 @@ class BossJobScanner:
                     f"耗时 {(time.monotonic() - started_at) / 60:.1f} 分钟"
                 )
                 if page_number >= self.config.max_pages_per_keyword:
+                    query_completed = True
                     break
                 self.page.run_js("window.scrollTo(0, document.body.scrollHeight);")
                 self.sleeper(self.rng.uniform(self.config.scroll_min_seconds, self.config.scroll_max_seconds))
-            if self.checkpoint:
+            if self.checkpoint and query_completed:
                 self.checkpoint.complete_query(query)
-        if self.checkpoint:
+        if self.checkpoint and len(self.checkpoint.data["completed_queries"]) == len(queries):
             self.checkpoint.complete()
         self.last_raw_jobs = list(collected.values())
         result = self.filter(self.last_raw_jobs)

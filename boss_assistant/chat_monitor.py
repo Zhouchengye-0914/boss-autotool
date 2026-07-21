@@ -11,7 +11,7 @@ from .actions import find_unique, human_click
 from .config import ChatConfig, ResumeConfig
 from .deepseek import DeepSeekError, DeepSeekResumeMatcher, choose_resume
 from .persistence import SHANGHAI
-from .records import MessageRecord, RecordStore
+from .records import MessageRecord
 from .monitor import LayeredReporter
 from .resume_sender import ChatResumeSender
 from . import selectors
@@ -72,7 +72,7 @@ class ChatMonitor:
         self,
         tab: Any,
         config: ChatConfig,
-        store: RecordStore,
+        store: Any,
         reporter: LayeredReporter,
         resume_config: ResumeConfig | None = None,
         chat_db: Any | None = None,
@@ -377,7 +377,7 @@ class ChatMonitor:
                 human_click(self.tab, item, rng=self.rng, sleeper=self.sleeper)
                 self.sleeper(self.rng.uniform(0.5, 1.5))
                 visible_messages = self._visible_messages(conversation_id, contact_name)
-                if self.chat_db is not None:
+                if self.chat_db is not None and self.chat_db is not self.store:
                     for message in visible_messages:
                         self.chat_db.record_message(message)
                 explicit_request = False

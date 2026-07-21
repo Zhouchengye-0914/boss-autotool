@@ -79,10 +79,10 @@ class UiConfigTests(unittest.TestCase):
             release = threading.Event()
             controller._worker = lambda _action: release.wait(1)
             controller.start("scan")
-            controller.start("watch")
-            self.assertEqual({"scan", "watch"}, controller.active_actions)
+            controller.start("communicate")
+            self.assertEqual({"scan", "communicate"}, controller.active_actions)
             with self.assertRaisesRegex(RuntimeError, "同一功能模块"):
-                controller.start("check")
+                controller.start("watch")
             with self.assertRaisesRegex(RuntimeError, "独占"):
                 controller.start("full")
             release.set()

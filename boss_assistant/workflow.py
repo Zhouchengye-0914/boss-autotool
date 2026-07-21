@@ -80,20 +80,27 @@ class ScanCheckpoint:
     def __init__(self, path: Path):
         self.path = path
         self.data: dict[str, Any] = {
-            "schema_version": 1, "status": "idle", "queries": [],
+            "schema_version": 2, "status": "idle", "signature": {}, "queries": [],
             "completed_queries": [], "current_query": "", "current_page": 0, "jobs": {},
         }
 
-    def load(self, queries: tuple[str, ...]) -> None:
+    def load(self, signature: dict[str, Any] | tuple[str, ...]) -> None:
+        if isinstance(signature, tuple):
+            signature = {"queries": list(signature)}
+        queries = tuple(str(x) for x in signature.get("queries", []))
         if self.path.exists():
             try:
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise RuntimeError(f"搜索断点损坏，已保留原文件：{self.path}: {exc}") from exc
-            if raw.get("queries") == list(queries) and isinstance(raw.get("jobs"), dict):
+            if raw.get("signature") == signature and isinstance(raw.get("jobs"), dict):
                 self.data = raw
                 return
-        self.data["queries"] = list(queries)
+        self.data = {
+            "schema_version": 2, "status": "idle", "signature": signature,
+            "queries": list(queries), "completed_queries": [], "current_query": "",
+            "current_page": 0, "jobs": {},
+        }
         self.save()
 
     def save_page(self, query: str, page: int, jobs: list[dict[str, Any]]) -> None:
@@ -105,6 +112,11 @@ class ScanCheckpoint:
     def complete_query(self, query: str) -> None:
         if query not in self.data["completed_queries"]:
             self.data["completed_queries"].append(query)
+        self.save()
+
+    def interrupt_query(self, query: str, page: int, reason: str) -> None:
+        self.data.update(status="interrupted", current_query=query, current_page=page,
+                         last_error=reason)
         self.save()
 
     def complete(self) -> None:

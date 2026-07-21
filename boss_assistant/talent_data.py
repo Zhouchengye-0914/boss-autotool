@@ -114,6 +114,10 @@ class JobsDatabase:
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_jobs_eligible_score ON jobs(eligible, match_score DESC);
+            CREATE TABLE IF NOT EXISTS greeting_cache(
+                cache_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, profile_fingerprint TEXT NOT NULL,
+                greeting TEXT NOT NULL, model TEXT NOT NULL, created_at TEXT NOT NULL
+            );
             """)
 
     def replace_taxonomy(self, items: list[JobTaxonomyItem]) -> None:
@@ -170,6 +174,24 @@ class JobsDatabase:
                 raw_json=excluded.raw_json,match_score=excluded.match_score,
                 match_reasons=excluded.match_reasons,eligible=excluded.eligible,updated_at=excluded.updated_at
             """, values)
+
+    def cached_greeting(self, cache_key: str) -> str:
+        with sqlite3.connect(self.path) as db:
+            row = db.execute(
+                "SELECT greeting FROM greeting_cache WHERE cache_key=?", (cache_key,)
+            ).fetchone()
+        return str(row[0]) if row else ""
+
+    def save_greeting(self, cache_key: str, task_id: str, profile_fingerprint: str,
+                      greeting: str, model: str) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute(
+                """INSERT OR REPLACE INTO greeting_cache
+                (cache_key,task_id,profile_fingerprint,greeting,model,created_at)
+                VALUES(?,?,?,?,?,?)""",
+                (cache_key, task_id, profile_fingerprint, greeting, model,
+                 datetime.now(SHANGHAI).isoformat()),
+            )
 
 
 class CommunicationsDatabase:
@@ -240,7 +262,54 @@ class ChatDatabase:
                 message_fingerprint TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'pending_user',
                 detail TEXT, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS resume_invitations(
+                fingerprint TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+                classification TEXT NOT NULL, matched_keyword TEXT, status TEXT NOT NULL,
+                resume_name TEXT, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS chat_checks(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, checked_at TEXT NOT NULL,
+                unread_count INTEGER NOT NULL, new_messages INTEGER NOT NULL,
+                invitations INTEGER NOT NULL, note TEXT
+            );
+            CREATE TABLE IF NOT EXISTS resume_deliveries(
+                conversation_id TEXT PRIMARY KEY, job_title TEXT, company TEXT,
+                resume_key TEXT NOT NULL, resume_name TEXT, status TEXT NOT NULL,
+                reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
             """)
+
+    def migrate_legacy(self, legacy_path: Path) -> None:
+        """幂等导入旧审计库，保留历史简历投递状态，避免迁移后重复发送。"""
+        if not legacy_path.exists() or legacy_path.resolve() == self.path.resolve():
+            return
+        with sqlite3.connect(legacy_path) as legacy, sqlite3.connect(self.path) as db:
+            tables = {row[0] for row in legacy.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "messages" in tables:
+                for row in legacy.execute("""SELECT fingerprint,conversation_id,contact_name,
+                        job_title,company,direction,text,observed_at FROM messages"""):
+                    db.execute("""INSERT OR IGNORE INTO messages
+                        (fingerprint,conversation_id,direction,text,observed_at,source)
+                        VALUES(?,?,?,?,?,'legacy')""", (row[0], row[1], row[5], row[6], row[7]))
+                    db.execute("""INSERT OR IGNORE INTO conversations
+                        (conversation_id,contact_name,job_title,company,last_message_fingerprint,
+                         last_direction,last_observed_at,automation_state,updated_at)
+                        VALUES(?,?,?,?,?,?,?,'active',?)""",
+                        (row[1], row[2], row[3], row[4], row[0], row[5], row[7], row[7]))
+            if "resume_invitations" in tables:
+                db.executemany("""INSERT OR IGNORE INTO resume_invitations
+                    (fingerprint,conversation_id,classification,matched_keyword,status,
+                     resume_name,created_at) VALUES(?,?,?,?,?,?,?)""",
+                    legacy.execute("""SELECT fingerprint,conversation_id,classification,
+                        matched_keyword,status,resume_name,created_at FROM resume_invitations""").fetchall())
+            if "resume_deliveries" in tables:
+                db.executemany("""INSERT OR IGNORE INTO resume_deliveries
+                    (conversation_id,job_title,company,resume_key,resume_name,status,reason,
+                     created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                    legacy.execute("""SELECT conversation_id,job_title,company,resume_key,
+                        resume_name,status,reason,created_at,updated_at FROM resume_deliveries""").fetchall())
 
     def record_message(self, message: Any) -> bool:
         now = datetime.now(SHANGHAI).isoformat()
@@ -264,6 +333,45 @@ class ChatDatabase:
                  message.company, fingerprint, message.direction,
                  message.observed_at.isoformat(), now))
             return cursor.rowcount == 1
+
+    def add_message(self, message: Any) -> bool:
+        return self.record_message(message)
+
+    def add_invitation(self, message: Any, classification: str, keyword: str,
+                       resume_name: str = "") -> bool:
+        with sqlite3.connect(self.path) as db:
+            cursor = db.execute("""INSERT OR IGNORE INTO resume_invitations
+                (fingerprint,conversation_id,classification,matched_keyword,status,resume_name,created_at)
+                VALUES(?,?,?,?, 'pending',?,?)""",
+                (message.fingerprint, message.conversation_id, classification, keyword,
+                 resume_name, datetime.now(SHANGHAI).isoformat()))
+            return cursor.rowcount == 1
+
+    def record_chat_check(self, unread: int, new_messages: int, invitations: int,
+                          note: str = "") -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute("""INSERT INTO chat_checks
+                (checked_at,unread_count,new_messages,invitations,note) VALUES(?,?,?,?,?)""",
+                (datetime.now(SHANGHAI).isoformat(), unread, new_messages, invitations, note))
+
+    def resume_sent(self, conversation_id: str) -> bool:
+        with sqlite3.connect(self.path) as db:
+            row = db.execute("SELECT status FROM resume_deliveries WHERE conversation_id=?",
+                             (conversation_id,)).fetchone()
+        return bool(row and row[0] == "success")
+
+    def record_resume_delivery(self, conversation_id: str, job_title: str, company: str,
+                               resume_key: str, resume_name: str, status: str,
+                               reason: str = "") -> None:
+        now = datetime.now(SHANGHAI).isoformat()
+        with sqlite3.connect(self.path) as db:
+            db.execute("""INSERT INTO resume_deliveries
+                (conversation_id,job_title,company,resume_key,resume_name,status,reason,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET
+                resume_key=excluded.resume_key,resume_name=excluded.resume_name,
+                status=excluded.status,reason=excluded.reason,updated_at=excluded.updated_at""",
+                (conversation_id, job_title, company, resume_key, resume_name, status,
+                 reason, now, now))
 
     def last_fingerprint(self, conversation_id: str) -> str:
         with sqlite3.connect(self.path) as db:

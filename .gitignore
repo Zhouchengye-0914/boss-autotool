@@ -17,3 +17,7 @@ data/*.db-wal
 data/boss_site_probe.json
 reports/daily/*
 .env
+config.local.yaml
+data/tasks.scanned.json
+data/tasks.live-test-*.json
+data/candidates.*.json

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from boss_assistant.matching import match_job, recommend_titles
 from boss_assistant.persistence import SHANGHAI
-from boss_assistant.records import MessageRecord
+from boss_assistant.records import MessageRecord, RecordStore
 from boss_assistant.talent_data import (
     ChatDatabase, CommunicationsDatabase, JobsDatabase, ProfileSnapshot, parse_job_taxonomy,
 )
@@ -41,6 +41,8 @@ class TalentDataTests(unittest.TestCase):
             db.upsert_job({"job_id": "j1", "url": "https://example.com/j1",
                            "title": "数据分析师", "raw": {"x": 1}}, 88, ["技能匹配"], True)
             self.assertEqual(db.latest_profile().fingerprint, "fp")
+            db.save_greeting("cache", "task", "fp", "个性化文案", "deepseek-chat")
+            self.assertEqual("个性化文案", db.cached_greeting("cache"))
 
     def test_communication_and_chat_databases_are_separate(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -62,3 +64,18 @@ class TalentDataTests(unittest.TestCase):
             self.assertTrue(chat.record_interview_alert("c1", message.fingerprint, message.text))
             self.assertEqual(len(chat.pending_interview_alerts()), 1)
             self.assertNotEqual(communications.path, chat.path)
+            self.assertTrue(chat.add_invitation(message, "explicit", "发简历"))
+            chat.record_chat_check(1, 1, 1)
+            chat.record_resume_delivery("c1", "数据分析师", "公司", "data",
+                                        "数据相关", "success")
+            self.assertTrue(chat.resume_sent("c1"))
+
+    def test_legacy_resume_delivery_migrates_idempotently(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = RecordStore(root / "legacy.db"); legacy.initialize()
+            legacy.record_resume_delivery("c1", "AI产品", "公司", "ai", "AI相关",
+                                          "success")
+            chat = ChatDatabase(root / "chat.db"); chat.initialize()
+            chat.migrate_legacy(legacy.path); chat.migrate_legacy(legacy.path)
+            self.assertTrue(chat.resume_sent("c1"))

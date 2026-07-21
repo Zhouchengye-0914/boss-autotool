@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import yaml
 
-from .config import load_config
+from .config import _merge_config, load_config
 from .matching import recommend_titles
 from .persistence import ProgressStore, load_tasks
 from .scanner import save_tasks
@@ -44,10 +44,27 @@ class JobController:
         self.process: subprocess.Popen[str] | None = None
         self.config_lock = threading.Lock()
         self.last_data_error = ""
+        self.jobs_db: JobsDatabase | None = None
+        self.chat_db: ChatDatabase | None = None
+        self.communications_db: CommunicationsDatabase | None = None
+        self.taxonomy = []
         self.workflow_dir = root / "data" / "workflows"
         self.workflows = {action: WorkflowStateStore(self.workflow_dir / f"{action}.json") for action in ACTION_LABELS}
         for store in self.workflows.values():
             store.load(recover_interrupted=True)
+        try:
+            config = load_config(config_path)
+            self.jobs_db = JobsDatabase(config.storage.jobs_database_path); self.jobs_db.initialize()
+            self.chat_db = ChatDatabase(config.storage.chat_database_path); self.chat_db.initialize()
+            self.chat_db.migrate_legacy(config.storage.database_path)
+            self.communications_db = CommunicationsDatabase(config.storage.communications_database_path)
+            self.communications_db.initialize()
+            taxonomy_path = root / "data" / "job.md"
+            if taxonomy_path.exists():
+                self.taxonomy = parse_job_taxonomy(taxonomy_path)
+        except Exception as exc:
+            self.last_data_error = f"数据初始化失败：{exc}"
+            self.log(self.last_data_error)
 
     def log(self, message: str) -> None:
         with self.lock:
@@ -74,11 +91,10 @@ class JobController:
         names = {x.key: x.display_name for x in config.resume.options}
         suggestions: list[str] = []; alerts = 0
         try:
-            jobs = JobsDatabase(config.storage.jobs_database_path); jobs.initialize()
-            profile = jobs.latest_profile(); taxonomy = self.root / "data" / "job.md"
-            if profile and taxonomy.exists(): suggestions = recommend_titles(profile, parse_job_taxonomy(taxonomy), config.search.recommendation_limit)
-            chats = ChatDatabase(config.storage.chat_database_path); chats.initialize(); alerts = len(chats.pending_interview_alerts())
-            CommunicationsDatabase(config.storage.communications_database_path).initialize()
+            profile = self.jobs_db.latest_profile() if self.jobs_db else None
+            if profile and self.taxonomy:
+                suggestions = recommend_titles(profile, self.taxonomy, config.search.recommendation_limit)
+            alerts = len(self.chat_db.pending_interview_alerts()) if self.chat_db else 0
         except Exception as exc:
             message = f"数据概览读取失败：{exc}"
             if message != self.last_data_error:
@@ -124,7 +140,7 @@ class JobController:
             if action in self.active_actions: raise RuntimeError(f"{ACTION_LABELS[action]} 已经在运行")
             if "full" in self.active_actions or (action == "full" and self.active_actions):
                 raise RuntimeError("完整流程为独占模式，请先停止其他模块")
-            groups = ({"browser", "profile", "scan"}, {"check", "resume", "watch"},
+            groups = ({"browser", "profile", "scan", "check", "resume", "watch"},
                       {"init-workers", "communicate"})
             conflict = next((running for group in groups if action in group
                              for running in self.active_actions if running in group), "")
@@ -248,11 +264,13 @@ class JobController:
                 self.stage = ("运行中：" + "、".join(ACTION_LABELS[x] for x in sorted(self.active_actions))) if self.active_actions else ("已停止，可继续" if interrupted else "已完成")
 
 
-def _save_config(path: Path, payload: dict[str, Any]) -> None:
+def _save_config(path: Path, payload: dict[str, Any], output_path: Path | None = None) -> None:
     textual_values = json.dumps(payload, ensure_ascii=False)
     if "???" in textual_values:
         raise ValueError("请求中的中文编码已损坏，配置未保存；请刷新页面后重试")
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}; search = raw.setdefault("search", {})
+    target = output_path or path
+    source = target if target.exists() else path
+    raw = yaml.safe_load(source.read_text(encoding="utf-8")) or {}; search = raw.setdefault("search", {})
     keywords = payload.get("keywords", [])
     if not isinstance(keywords, list): raise ValueError("搜索关键词格式错误")
     pages, salary, workers = int(payload.get("max_pages",0)), int(payload.get("min_salary",0)), int(payload.get("workers",0))
@@ -266,14 +284,25 @@ def _save_config(path: Path, payload: dict[str, Any]) -> None:
     for option in resume.get("options",[]):
         if values.get(str(option.get("key"))): option["display_name"] = values[str(option["key"])]
     resume.setdefault("deepseek",{})["enabled"] = bool(payload.get("deepseek_enabled")); resume["conversation_preferences"] = str(payload.get("preferences") or "").strip()
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    validation = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.validate.tmp")
     try:
         temporary.write_text(yaml.safe_dump(raw,allow_unicode=True,sort_keys=False),encoding="utf-8")
-        load_config(temporary)
-        os.replace(temporary,path)
+        if output_path:
+            base = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            validation.write_text(
+                yaml.safe_dump(_merge_config(base, raw), allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            load_config(validation)
+        else:
+            load_config(temporary)
+        os.replace(temporary,target)
     finally:
         if temporary.exists():
             temporary.unlink()
+        if validation.exists():
+            validation.unlink()
 
 
 # 保留旧内部名称，避免已有脚本或测试在升级 UI 后中断。
@@ -296,7 +325,8 @@ def run_ui(root: Path, config_path: Path, host: str = "127.0.0.1", port: int = 8
             try:
                 payload=json.loads(self.rfile.read(int(self.headers.get("Content-Length","0"))) or b"{}"); route=urlparse(self.path).path
                 if route=="/api/config":
-                    with controller.config_lock: _save_config(config_path,payload)
+                    with controller.config_lock:
+                        _save_config(config_path, payload, root / "config.local.yaml")
                 elif route=="/api/action": controller.start(str(payload.get("action") or ""))
                 elif route=="/api/resume": controller.resume()
                 elif route=="/api/stop": controller.stop(str(payload.get("action") or ""))

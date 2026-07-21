@@ -11,6 +11,16 @@ class ConfigError(ValueError):
     pass
 
 
+def _merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _merge_config(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 @dataclass(frozen=True)
 class BrowserConfig:
     executable_path: Path
@@ -152,6 +162,15 @@ def load_config(path: str | Path) -> AppConfig:
         raise ConfigError(f"无法读取配置文件 {config_path}: {exc}") from exc
     if not isinstance(raw, dict):
         raise ConfigError("配置文件根节点必须是对象")
+    local_path = config_path.with_name("config.local.yaml")
+    if config_path.name == "config.yaml" and local_path.exists():
+        try:
+            local = yaml.safe_load(local_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise ConfigError(f"无法读取本地配置 {local_path}: {exc}") from exc
+        if not isinstance(local, dict):
+            raise ConfigError("config.local.yaml 根节点必须是对象")
+        raw = _merge_config(raw, local)
 
     root = config_path.parent
     browser = raw.get("browser", {})

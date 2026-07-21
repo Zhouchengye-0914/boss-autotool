@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import subprocess
 import sys
@@ -15,7 +16,6 @@ from boss_assistant.pacing import PacingController
 from boss_assistant.persistence import ProgressError, ProgressStore, load_tasks
 from boss_assistant.scheduler import TaskScheduler
 from boss_assistant.chat_monitor import ChatMonitor, CHAT_URL
-from boss_assistant.records import RecordStore
 from boss_assistant.monitor import LayeredReporter
 from boss_assistant.daily_report import DailyReportGenerator
 from boss_assistant.scanner import BossJobScanner, jobs_to_tasks, save_tasks
@@ -192,6 +192,7 @@ def main() -> int:
             communications_db.initialize()
             chat_db = ChatDatabase(config.storage.chat_database_path)
             chat_db.initialize()
+            chat_db.migrate_legacy(config.storage.database_path)
             taxonomy_path = config.project_root / "data" / "job.md"
             if taxonomy_path.exists():
                 jobs_db.replace_taxonomy(parse_job_taxonomy(taxonomy_path))
@@ -231,20 +232,34 @@ def main() -> int:
                     print("[PROFILE] 推荐搜索职位：" + "、".join(suggestions))
                 if profile and config.resume.deepseek.enabled:
                     assistant = DeepSeekResumeMatcher(config.resume.deepseek)
-                    personalized = []
-                    for task in tasks:
+                    personalized = list(tasks)
+                    save_tasks(config.search.output_file, personalized)
+                    safe_profile = "\n".join(
+                        text for name, text in profile.sections.items() if name != "personal"
+                    )
+                    for index, task in enumerate(tasks):
+                        source = "\n".join(("greeting-v1", profile.fingerprint,
+                                            config.resume.deepseek.model,
+                                            task.task_id, task.job_title, task.company,
+                                            task.job_description, task.job_category))
+                        cache_key = hashlib.sha256(source.encode("utf-8")).hexdigest()
                         try:
-                            safe_profile = "\n".join(
-                                text for name, text in profile.sections.items() if name != "personal"
-                            )
-                            greeting = assistant.greeting(
-                                safe_profile, "\n".join((task.job_title, task.company,
-                                                        task.job_description, task.job_category))
-                            )
-                            personalized.append(replace(task, greeting=greeting or task.greeting))
+                            greeting = jobs_db.cached_greeting(cache_key)
+                            if greeting:
+                                print(f"[AI] {index + 1}/{len(tasks)} 使用缓存：{task.job_title}")
+                            else:
+                                greeting = assistant.greeting(
+                                    safe_profile, "\n".join((task.job_title, task.company,
+                                                            task.job_description, task.job_category))
+                                )
+                                if greeting:
+                                    jobs_db.save_greeting(cache_key, task.task_id, profile.fingerprint,
+                                                          greeting, config.resume.deepseek.model)
+                                print(f"[AI] {index + 1}/{len(tasks)} 已生成：{task.job_title}")
+                            personalized[index] = replace(task, greeting=greeting or task.greeting)
                         except DeepSeekError as exc:
                             print(f"[AI] {task.task_id} 招呼语生成失败，使用默认文案：{exc}")
-                            personalized.append(task)
+                        save_tasks(config.search.output_file, personalized)
                     tasks = personalized
                 save_tasks(config.search.output_file, tasks)
                 print(f"[SEARCH] 已保存 {len(tasks)} 条任务：{config.search.output_file}")
@@ -260,11 +275,6 @@ def main() -> int:
                     print("搜索后没有可执行岗位，结束运行。")
                     return 0
             reporter = LayeredReporter()
-            record_store = RecordStore(config.storage.database_path)
-            record_store.initialize()
-            for task in tasks:
-                record_store.upsert_job(task)
-
             executor = BossTaskExecutor(
                 jobs_tab, config, tab_factory=session.page.new_tab
             )
@@ -272,7 +282,7 @@ def main() -> int:
             if config.chat and config.chat.enabled:
                 chat_tab = session.page.new_tab(CHAT_URL)
                 chat_monitor = ChatMonitor(
-                    chat_tab, config.chat, record_store, reporter, config.resume,
+                    chat_tab, config.chat, chat_db, reporter, config.resume,
                     chat_db=chat_db,
                     profile_text=("\n".join(
                         value for key, value in profile.sections.items() if key != "personal"
@@ -354,6 +364,8 @@ def main() -> int:
                 config.storage.database_path,
                 config.output.result_csv,
                 config.storage.reports_dir,
+                jobs_database_path=config.storage.jobs_database_path,
+                chat_database_path=config.storage.chat_database_path,
             ).write()
             reporter.summary(
                 f"运行结束：成功 {final_state.success}，跳过 {final_state.skipped}，"

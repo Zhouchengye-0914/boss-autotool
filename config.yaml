@@ -73,7 +73,7 @@ resume_delivery:
     面试时间、到岗时间、薪资承诺和个人隐私信息必须由本人确认；不主动承诺无法核实的经历。
   options:
   - key: general
-    display_name: 周成业-浙理工-应数26本-
+    display_name: 通用简历
     option_index: 0
     keywords:
     - 数据运营

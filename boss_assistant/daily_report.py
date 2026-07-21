@@ -25,10 +25,14 @@ class DailyMetrics:
 
 
 class DailyReportGenerator:
-    def __init__(self, database_path: Path, result_csv: Path, reports_dir: Path):
+    def __init__(self, database_path: Path, result_csv: Path, reports_dir: Path,
+                 *, jobs_database_path: Path | None = None,
+                 chat_database_path: Path | None = None):
         self.database_path = database_path
         self.result_csv = result_csv
         self.reports_dir = reports_dir
+        self.jobs_database_path = jobs_database_path
+        self.chat_database_path = chat_database_path
 
     def collect(self, day: str | None = None) -> DailyMetrics:
         day = day or datetime.now(SHANGHAI).date().isoformat()
@@ -51,7 +55,24 @@ class DailyReportGenerator:
                         metrics.failed_attempts += 1
                     elif result == "skipped":
                         metrics.skipped_tasks += 1
-        if self.database_path.exists():
+        if self.jobs_database_path and self.jobs_database_path.exists():
+            with sqlite3.connect(self.jobs_database_path) as db:
+                metrics.stored_jobs = db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        if self.chat_database_path and self.chat_database_path.exists():
+            with sqlite3.connect(self.chat_database_path) as db:
+                metrics.inbound_messages = db.execute(
+                    "SELECT COUNT(*) FROM messages WHERE direction='inbound' AND observed_at LIKE ?",
+                    (f"{day}%",),
+                ).fetchone()[0]
+                metrics.explicit_resume_invitations = db.execute(
+                    "SELECT COUNT(*) FROM resume_invitations WHERE classification='explicit' AND created_at LIKE ?",
+                    (f"{day}%",),
+                ).fetchone()[0]
+                metrics.manual_reviews = db.execute(
+                    "SELECT COUNT(*) FROM resume_invitations WHERE classification='manual_review' AND created_at LIKE ?",
+                    (f"{day}%",),
+                ).fetchone()[0]
+        elif self.database_path.exists():
             with sqlite3.connect(self.database_path) as db:
                 metrics.stored_jobs = db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
                 metrics.inbound_messages = db.execute(
@@ -104,4 +125,3 @@ class DailyReportGenerator:
             encoding="utf-8",
         )
         return md_path, json_path
-
