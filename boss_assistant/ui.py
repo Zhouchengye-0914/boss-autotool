@@ -40,6 +40,8 @@ class JobController:
         self.logs: deque[str] = deque(maxlen=500)
         self.processes: dict[str, subprocess.Popen[str]] = {}
         self.process: subprocess.Popen[str] | None = None
+        self.config_lock = threading.Lock()
+        self.last_data_error = ""
         self.workflow = WorkflowStateStore(root / "data" / "workflow_state.json")
         self.workflow.load(recover_interrupted=True)
 
@@ -73,7 +75,13 @@ class JobController:
             if profile and taxonomy.exists(): suggestions = recommend_titles(profile, parse_job_taxonomy(taxonomy), config.search.recommendation_limit)
             chats = ChatDatabase(config.storage.chat_database_path); chats.initialize(); alerts = len(chats.pending_interview_alerts())
             CommunicationsDatabase(config.storage.communications_database_path).initialize()
-        except Exception as exc: self.log(f"数据概览读取失败：{exc}")
+        except Exception as exc:
+            message = f"数据概览读取失败：{exc}"
+            if message != self.last_data_error:
+                self.log(message)
+                self.last_data_error = message
+        else:
+            self.last_data_error = ""
         recovery = self.workflow.load()
         return {
             "running": self.running, "stage": self.stage, "logs": list(self.logs), "total": len(tasks),
@@ -191,6 +199,9 @@ class JobController:
 
 
 def _save_config(path: Path, payload: dict[str, Any]) -> None:
+    textual_values = json.dumps(payload, ensure_ascii=False)
+    if "???" in textual_values:
+        raise ValueError("请求中的中文编码已损坏，配置未保存；请刷新页面后重试")
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}; search = raw.setdefault("search", {})
     keywords = payload.get("keywords", [])
     if not isinstance(keywords, list): raise ValueError("搜索关键词格式错误")
@@ -205,7 +216,14 @@ def _save_config(path: Path, payload: dict[str, Any]) -> None:
     for option in resume.get("options",[]):
         if values.get(str(option.get("key"))): option["display_name"] = values[str(option["key"])]
     resume.setdefault("deepseek",{})["enabled"] = bool(payload.get("deepseek_enabled")); resume["conversation_preferences"] = str(payload.get("preferences") or "").strip()
-    temporary = path.with_suffix(".yaml.tmp"); temporary.write_text(yaml.safe_dump(raw,allow_unicode=True,sort_keys=False),encoding="utf-8"); load_config(temporary); os.replace(temporary,path)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        temporary.write_text(yaml.safe_dump(raw,allow_unicode=True,sort_keys=False),encoding="utf-8")
+        load_config(temporary)
+        os.replace(temporary,path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 # 保留旧内部名称，避免已有脚本或测试在升级 UI 后中断。
@@ -229,7 +247,7 @@ def run_ui(root: Path, config_path: Path, host: str = "127.0.0.1", port: int = 8
                 payload=json.loads(self.rfile.read(int(self.headers.get("Content-Length","0"))) or b"{}"); route=urlparse(self.path).path
                 if route=="/api/config":
                     if controller.running: raise RuntimeError("运行期间不能修改配置")
-                    _save_config(config_path,payload)
+                    with controller.config_lock: _save_config(config_path,payload)
                 elif route=="/api/action": controller.start(str(payload.get("action") or ""))
                 elif route=="/api/resume": controller.resume()
                 elif route=="/api/stop": controller.stop()

@@ -46,3 +46,24 @@ class UiConfigTests(unittest.TestCase):
         controller.abort()
         self.assertTrue(process.terminated)
         self.assertTrue(controller.stop_requested)
+
+    def test_config_save_leaves_no_fixed_temp_file(self):
+        source = Path(__file__).resolve().parents[1] / "config.yaml"
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "config.yaml"
+            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            _atomic_save_search(target, {"keywords": [], "max_pages": 1, "min_salary": 0,
+                                         "workers": 1, "greeting": "您好"})
+            self.assertFalse(target.with_suffix(".yaml.tmp").exists())
+            self.assertEqual(load_config(target).search.greeting, "您好")
+
+    def test_broken_client_encoding_is_rejected_without_changing_config(self):
+        source = Path(__file__).resolve().parents[1] / "config.yaml"
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "config.yaml"
+            original = source.read_text(encoding="utf-8")
+            target.write_text(original, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "编码已损坏"):
+                _atomic_save_search(target, {"keywords": ["????"], "max_pages": 1,
+                                             "min_salary": 0, "workers": 1, "greeting": "???"})
+            self.assertEqual(original, target.read_text(encoding="utf-8"))
