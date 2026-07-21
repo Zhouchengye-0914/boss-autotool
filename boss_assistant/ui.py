@@ -124,6 +124,12 @@ class JobController:
             if action in self.active_actions: raise RuntimeError(f"{ACTION_LABELS[action]} 已经在运行")
             if "full" in self.active_actions or (action == "full" and self.active_actions):
                 raise RuntimeError("完整流程为独占模式，请先停止其他模块")
+            groups = ({"browser", "profile", "scan"}, {"check", "resume", "watch"},
+                      {"init-workers", "communicate"})
+            conflict = next((running for group in groups if action in group
+                             for running in self.active_actions if running in group), "")
+            if conflict:
+                raise RuntimeError(f"{ACTION_LABELS[conflict]} 正在占用同一功能模块")
             self.active_actions.add(action)
             self.running = True; self.stop_requested = self.abort_requested = False
             self.stop_actions.discard(action)
@@ -141,22 +147,27 @@ class JobController:
             if action not in self.active_actions:
                 self.start(action)
 
-    def stop(self) -> None:
+    def stop(self, action: str = "") -> None:
         with self.lock:
             self.stop_requested = True
-            self.stop_actions.update(self.active_actions)
-        self.log("已请求安全停止所有运行模块；当前步骤结束后保留断点。")
+            targets = {action} if action else set(self.active_actions)
+            self.stop_actions.update(targets & self.active_actions)
+        label = ACTION_LABELS.get(action, "所有运行模块")
+        self.log(f"已请求安全停止{label}；当前步骤结束后保留断点。")
 
-    def abort(self) -> None:
+    def abort(self, action: str = "") -> None:
         with self.lock:
             self.stop_requested = self.abort_requested = True
-            self.stop_actions.update(self.active_actions)
-            processes = list(self.processes.values())
-            if self.process is not None and self.process not in processes:
+            targets = {action} if action else set(self.active_actions)
+            self.stop_actions.update(targets & self.active_actions)
+            prefixes = {"communicate": "communicate-", "init-workers": "init-", "watch": "watch-"}
+            processes = [process for key, process in self.processes.items()
+                         if not action or key == action or key.startswith(prefixes.get(action, action + "-"))]
+            if not action and self.process is not None and self.process not in processes:
                 processes.append(self.process)
         for process in processes:
             if process.poll() is None: process.terminate()
-        self.log("已立即停止；已完成的搜索和沟通断点均保留。")
+        self.log(f"已立即停止{ACTION_LABELS.get(action, '所有运行模块')}；已完成断点均保留。")
 
     def _stopped(self, action: str) -> bool:
         with self.lock:
@@ -288,8 +299,8 @@ def run_ui(root: Path, config_path: Path, host: str = "127.0.0.1", port: int = 8
                     with controller.config_lock: _save_config(config_path,payload)
                 elif route=="/api/action": controller.start(str(payload.get("action") or ""))
                 elif route=="/api/resume": controller.resume()
-                elif route=="/api/stop": controller.stop()
-                elif route=="/api/abort": controller.abort()
+                elif route=="/api/stop": controller.stop(str(payload.get("action") or ""))
+                elif route=="/api/abort": controller.abort(str(payload.get("action") or ""))
                 else: return self.json({"error":"not found"},404)
                 self.json({"ok":True})
             except Exception as exc: self.json({"error":str(exc)},400)

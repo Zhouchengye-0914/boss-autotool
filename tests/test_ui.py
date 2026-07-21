@@ -81,6 +81,22 @@ class UiConfigTests(unittest.TestCase):
             controller.start("scan")
             controller.start("watch")
             self.assertEqual({"scan", "watch"}, controller.active_actions)
+            with self.assertRaisesRegex(RuntimeError, "同一功能模块"):
+                controller.start("check")
             with self.assertRaisesRegex(RuntimeError, "独占"):
                 controller.start("full")
             release.set()
+
+    def test_abort_can_target_one_module(self):
+        class FakeProcess:
+            def __init__(self): self.terminated = False
+            def poll(self): return None
+            def terminate(self): self.terminated = True
+
+        controller = JobController(Path.cwd(), Path("config.yaml"))
+        scan, watch = FakeProcess(), FakeProcess()
+        controller.active_actions.update({"scan", "watch"})
+        controller.processes.update({"scan": scan, "watch-chat": watch})
+        controller.abort("scan")
+        self.assertTrue(scan.terminated)
+        self.assertFalse(watch.terminated)
