@@ -14,17 +14,19 @@ from .models import JobTask, OperationType
 from .workflow import ScanCheckpoint
 
 
-def _find_job_lists(value: Any) -> list[list[dict[str, Any]]]:
-    found: list[list[dict[str, Any]]] = []
+def _find_job_pages(value: Any) -> list[tuple[list[dict[str, Any]], bool | None]]:
+    found: list[tuple[list[dict[str, Any]], bool | None]] = []
     if isinstance(value, dict):
         for key, child in value.items():
             if key.lower() == "joblist" and isinstance(child, list):
-                found.append([item for item in child if isinstance(item, dict)])
+                has_more = next((value[name] for name in ("hasMore", "hasNextPage", "hasNext")
+                                 if isinstance(value.get(name), bool)), None)
+                found.append(([item for item in child if isinstance(item, dict)], has_more))
             else:
-                found.extend(_find_job_lists(child))
+                found.extend(_find_job_pages(child))
     elif isinstance(value, list):
         for child in value:
-            found.extend(_find_job_lists(child))
+            found.extend(_find_job_pages(child))
     return found
 
 
@@ -37,7 +39,7 @@ def parse_joblist_response(body: Any, query: str = "") -> list[dict[str, Any]]:
     if not isinstance(body, dict) or body.get("code") not in (None, 0):
         return []
     jobs: list[dict[str, Any]] = []
-    for job_list in _find_job_lists(body):
+    for job_list, _ in _find_job_pages(body):
         for raw in job_list:
             job_id = str(raw.get("encryptJobId") or raw.get("jobId") or "").strip()
             if not job_id:
@@ -65,6 +67,16 @@ def parse_joblist_response(body: Any, query: str = "") -> list[dict[str, Any]]:
     return jobs
 
 
+def parse_joblist_page(body: Any, query: str = "") -> tuple[list[dict[str, Any]], bool | None]:
+    if isinstance(body, str):
+        try: body = json.loads(body)
+        except json.JSONDecodeError: return [], None
+    jobs = parse_joblist_response(body, query)
+    pages = _find_job_pages(body) if isinstance(body, dict) else []
+    flags = [has_more for _, has_more in pages if has_more is not None]
+    return jobs, flags[-1] if flags else None
+
+
 def salary_meets_minimum(text: str, minimum_k: int) -> bool:
     normalized = (text or "").strip().upper()
     if not normalized or "面议" in normalized or "元/天" in normalized:
@@ -89,15 +101,15 @@ class BossJobScanner:
         self.checkpoint = checkpoint
         self.last_raw_jobs: list[dict[str, Any]] = []
 
-    def _packet_jobs(self, query: str) -> list[dict[str, Any]]:
+    def _packet_jobs(self, query: str) -> tuple[list[dict[str, Any]], bool | None, bool]:
         try:
             for packet in self.page.listen.steps(timeout=self.config.listen_timeout_seconds):
-                jobs = parse_joblist_response(packet.response.body, query)
-                if jobs:
-                    return jobs
+                jobs, has_more = parse_joblist_page(packet.response.body, query)
+                if jobs or has_more is False:
+                    return jobs, has_more, False
         except Exception as exc:
             self.reporter(f"[SEARCH] joblist 监听失败：{type(exc).__name__}: {exc}")
-        return []
+        return [], None, True
 
     def scan(self) -> list[dict[str, Any]]:
         started_at = time.monotonic()
@@ -135,13 +147,17 @@ class BossJobScanner:
             page_number = 0
             query_completed = False
             while page_number < self.config.max_pages_per_keyword:
-                jobs = self._packet_jobs(query)
+                jobs, has_more, failed = self._packet_jobs(query)
                 if not jobs:
-                    if self.checkpoint:
+                    if has_more is False:
+                        query_completed = True
+                        self.reporter(f"[SEARCH] {query or '推荐流'} 已到最后一页")
+                    elif self.checkpoint:
                         self.checkpoint.interrupt_query(
-                            query, page_number, "未收到 joblist 数据；保留为可恢复状态"
+                            query, page_number,
+                            "joblist 监听失败；保留为可恢复状态" if failed else "未收到职位数据",
                         )
-                    self.reporter(f"[SEARCH] {query or '推荐流'} 未收到数据，本关键词保留断点")
+                        self.reporter(f"[SEARCH] {query or '推荐流'} 未收到数据，本关键词保留断点")
                     break
                 before = len(collected)
                 for job in jobs:
@@ -154,6 +170,10 @@ class BossJobScanner:
                     f"新增 {len(collected) - before}，累计 {len(collected)}，"
                     f"耗时 {(time.monotonic() - started_at) / 60:.1f} 分钟"
                 )
+                if has_more is False:
+                    query_completed = True
+                    self.reporter(f"[SEARCH] {query or '推荐流'} 已到最后一页")
+                    break
                 if page_number >= self.config.max_pages_per_keyword:
                     query_completed = True
                     break

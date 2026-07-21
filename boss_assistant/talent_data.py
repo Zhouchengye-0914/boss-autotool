@@ -118,6 +118,9 @@ class JobsDatabase:
                 cache_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, profile_fingerprint TEXT NOT NULL,
                 greeting TEXT NOT NULL, model TEXT NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS migration_sources(
+                source_path TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, migrated_at TEXT NOT NULL
+            );
             """)
 
     def replace_taxonomy(self, items: list[JobTaxonomyItem]) -> None:
@@ -175,6 +178,34 @@ class JobsDatabase:
                 match_reasons=excluded.match_reasons,eligible=excluded.eligible,updated_at=excluded.updated_at
             """, values)
 
+    def upsert_task(self, task: Any) -> None:
+        self.upsert_job({
+            "job_id": task.job_id or task.task_id,
+            "url": task.job_url,
+            "title": task.job_title,
+            "company": task.company,
+            "job_description": task.job_description,
+            "query": task.job_category,
+            "raw": {"source": "task_backfill", "task_id": task.task_id},
+        }, float(task.match_score or 0), ["从本地任务文件回填"], True)
+
+    def backfill_tasks(self, tasks: list[Any], source_path: Path) -> int:
+        fingerprint = f"{source_path.stat().st_size}:{source_path.stat().st_mtime_ns}"
+        with sqlite3.connect(self.path) as db:
+            previous = db.execute(
+                "SELECT fingerprint FROM migration_sources WHERE source_path=?",
+                (str(source_path.resolve()),),
+            ).fetchone()
+        if previous and previous[0] == fingerprint:
+            return 0
+        for task in tasks:
+            self.upsert_task(task)
+        with sqlite3.connect(self.path) as db:
+            db.execute("INSERT OR REPLACE INTO migration_sources VALUES(?,?,?)",
+                       (str(source_path.resolve()), fingerprint,
+                        datetime.now(SHANGHAI).isoformat()))
+        return len(tasks)
+
     def cached_greeting(self, cache_key: str) -> str:
         with sqlite3.connect(self.path) as db:
             row = db.execute(
@@ -211,7 +242,43 @@ class CommunicationsDatabase:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, event_type TEXT NOT NULL,
                 detail TEXT, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS migration_sources(
+                source_path TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, migrated_at TEXT NOT NULL
+            );
             """)
+
+    def migrate_from(self, source_path: Path) -> int:
+        if not source_path.exists() or source_path.resolve() == self.path.resolve():
+            return 0
+        fingerprint = f"{source_path.stat().st_size}:{source_path.stat().st_mtime_ns}"
+        with sqlite3.connect(self.path) as target:
+            previous = target.execute(
+                "SELECT fingerprint FROM migration_sources WHERE source_path=?",
+                (str(source_path.resolve()),),
+            ).fetchone()
+            if previous and previous[0] == fingerprint:
+                return 0
+        with sqlite3.connect(source_path) as source:
+            tables = {row[0] for row in source.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "communications" not in tables:
+                return 0
+            rows = source.execute("SELECT * FROM communications").fetchall()
+            columns = [row[1] for row in source.execute("PRAGMA table_info(communications)")]
+        inserted = 0
+        with sqlite3.connect(self.path) as target:
+            placeholders = ",".join("?" for _ in columns)
+            names = ",".join(columns)
+            for row in rows:
+                cursor = target.execute(
+                    f"INSERT OR IGNORE INTO communications({names}) VALUES({placeholders})", row
+                )
+                inserted += cursor.rowcount
+            target.execute("INSERT OR REPLACE INTO migration_sources VALUES(?,?,?)",
+                           (str(source_path.resolve()), fingerprint,
+                            datetime.now(SHANGHAI).isoformat()))
+        return inserted
 
     def record(self, *, task_id: str, job_id: str, job_url: str, job_title: str,
                company: str, greeting: str, source: str, score: float, status: str,
@@ -277,12 +344,23 @@ class ChatDatabase:
                 resume_key TEXT NOT NULL, resume_name TEXT, status TEXT NOT NULL,
                 reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS migration_sources(
+                source_path TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, migrated_at TEXT NOT NULL
+            );
             """)
 
     def migrate_legacy(self, legacy_path: Path) -> None:
         """幂等导入旧审计库，保留历史简历投递状态，避免迁移后重复发送。"""
         if not legacy_path.exists() or legacy_path.resolve() == self.path.resolve():
             return
+        fingerprint = f"{legacy_path.stat().st_size}:{legacy_path.stat().st_mtime_ns}"
+        with sqlite3.connect(self.path) as db:
+            previous = db.execute(
+                "SELECT fingerprint FROM migration_sources WHERE source_path=?",
+                (str(legacy_path.resolve()),),
+            ).fetchone()
+            if previous and previous[0] == fingerprint:
+                return
         with sqlite3.connect(legacy_path) as legacy, sqlite3.connect(self.path) as db:
             tables = {row[0] for row in legacy.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
@@ -310,6 +388,9 @@ class ChatDatabase:
                      created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)""",
                     legacy.execute("""SELECT conversation_id,job_title,company,resume_key,
                         resume_name,status,reason,created_at,updated_at FROM resume_deliveries""").fetchall())
+            db.execute("INSERT OR REPLACE INTO migration_sources VALUES(?,?,?)",
+                       (str(legacy_path.resolve()), fingerprint,
+                        datetime.now(SHANGHAI).isoformat()))
 
     def record_message(self, message: Any) -> bool:
         now = datetime.now(SHANGHAI).isoformat()

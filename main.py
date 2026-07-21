@@ -193,6 +193,9 @@ def main() -> int:
             chat_db = ChatDatabase(config.storage.chat_database_path)
             chat_db.initialize()
             chat_db.migrate_legacy(config.storage.database_path)
+            if args.command == "run":
+                for task in tasks:
+                    jobs_db.upsert_task(task)
             taxonomy_path = config.project_root / "data" / "job.md"
             if taxonomy_path.exists():
                 jobs_db.replace_taxonomy(parse_job_taxonomy(taxonomy_path))

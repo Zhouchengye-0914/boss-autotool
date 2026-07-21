@@ -11,7 +11,7 @@ def isolated_config(
     config: AppConfig, instance: str, port_offset: int = 0,
     worker_index: int = 0, worker_count: int = 1,
 ) -> AppConfig:
-    """为独立进程派生互不共享的浏览器和运行数据路径。"""
+    """隔离浏览器与运行文件；业务三库保持共享，以便统一统计和幂等判断。"""
     safe = re.sub(r"[^A-Za-z0-9_-]+", "-", instance).strip("-")
     if not safe:
         raise ConfigError("instance 必须包含字母、数字、下划线或短横线")
@@ -44,8 +44,5 @@ def isolated_config(
         config.storage,
         database_path=base / "boss_assistant.db",
         reports_dir=base / "reports",
-        jobs_database_path=base / "jobs.db",
-        communications_database_path=base / "communications.db",
-        chat_database_path=base / "chat.db",
     )
     return replace(config, browser=browser, scheduler=scheduler, output=output, storage=storage)

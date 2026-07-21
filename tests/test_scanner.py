@@ -3,7 +3,9 @@ import tempfile
 from pathlib import Path
 
 from boss_assistant.config import load_config
-from boss_assistant.scanner import BossJobScanner, parse_joblist_response, salary_meets_minimum
+from boss_assistant.scanner import (
+    BossJobScanner, parse_joblist_page, parse_joblist_response, salary_meets_minimum,
+)
 from boss_assistant.workflow import ScanCheckpoint
 
 
@@ -18,6 +20,14 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0]["job_id"], "abc")
         self.assertEqual(jobs[0]["query"], "数据分析")
+
+    def test_parses_explicit_last_page(self):
+        jobs, has_more = parse_joblist_page({"code": 0, "zpData": {
+            "jobList": [{"encryptJobId": "abc", "jobName": "数据分析师"}],
+            "hasMore": False,
+        }})
+        self.assertEqual(1, len(jobs))
+        self.assertFalse(has_more)
 
     def test_salary_filter_uses_lower_bound(self):
         self.assertTrue(salary_meets_minimum("8-12K", 8))

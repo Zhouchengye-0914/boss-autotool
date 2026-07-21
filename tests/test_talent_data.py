@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import sqlite3
+from types import SimpleNamespace
 from datetime import datetime
 from pathlib import Path
 
@@ -43,6 +45,23 @@ class TalentDataTests(unittest.TestCase):
             self.assertEqual(db.latest_profile().fingerprint, "fp")
             db.save_greeting("cache", "task", "fp", "个性化文案", "deepseek-chat")
             self.assertEqual("个性化文案", db.cached_greeting("cache"))
+            db.upsert_task(SimpleNamespace(
+                job_id="j2", task_id="t2", job_url="https://example.com/j2",
+                job_title="数据运营", company="公司", job_description="SQL",
+                job_category="数据", match_score=70,
+            ))
+            connection = sqlite3.connect(db.path)
+            try:
+                self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0])
+            finally:
+                connection.close()
+            source = Path(directory) / "tasks.json"
+            source.write_text("[]", encoding="utf-8")
+            task = SimpleNamespace(job_id="j3", task_id="t3", job_url="https://example.com/j3",
+                                   job_title="AI产品", company="公司", job_description="AI",
+                                   job_category="AI", match_score=75)
+            self.assertEqual(1, db.backfill_tasks([task], source))
+            self.assertEqual(0, db.backfill_tasks([task], source))
 
     def test_communication_and_chat_databases_are_separate(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -79,3 +98,14 @@ class TalentDataTests(unittest.TestCase):
             chat = ChatDatabase(root / "chat.db"); chat.initialize()
             chat.migrate_legacy(legacy.path); chat.migrate_legacy(legacy.path)
             self.assertTrue(chat.resume_sent("c1"))
+
+    def test_worker_communications_migrate_to_central_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            worker = CommunicationsDatabase(root / "worker.db"); worker.initialize()
+            worker.record(task_id="t1", job_id="j1", job_url="https://example.com",
+                          job_title="数据分析", company="公司", greeting="您好",
+                          source="template", score=70, status="verified", attempts=1)
+            central = CommunicationsDatabase(root / "central.db"); central.initialize()
+            self.assertEqual(1, central.migrate_from(worker.path))
+            self.assertEqual(0, central.migrate_from(worker.path))

@@ -15,6 +15,10 @@ class InstanceConfigTests(unittest.TestCase):
         self.assertNotEqual(first.browser.debug_port, second.browser.debug_port)
         self.assertNotEqual(first.scheduler.progress_file, second.scheduler.progress_file)
         self.assertNotEqual(first.storage.database_path, second.storage.database_path)
+        self.assertEqual(first.storage.jobs_database_path, second.storage.jobs_database_path)
+        self.assertEqual(first.storage.communications_database_path,
+                         second.storage.communications_database_path)
+        self.assertEqual(first.storage.chat_database_path, second.storage.chat_database_path)
         self.assertEqual(
             first.scheduler.daily_success_limit + second.scheduler.daily_success_limit,
             config.scheduler.daily_success_limit,

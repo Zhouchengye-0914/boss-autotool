@@ -23,6 +23,11 @@ from .scanner import save_tasks
 from .talent_data import ChatDatabase, CommunicationsDatabase, JobsDatabase, parse_job_taxonomy
 from .workflow import WorkflowStateStore
 
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - 当前项目运行于 Windows
+    msvcrt = None
+
 
 ACTION_LABELS = {
     "browser": "检查 Chrome 登录", "profile": "同步在线简历", "init-workers": "初始化实例登录",
@@ -59,6 +64,12 @@ class JobController:
             self.chat_db.migrate_legacy(config.storage.database_path)
             self.communications_db = CommunicationsDatabase(config.storage.communications_database_path)
             self.communications_db.initialize()
+            if config.search.output_file.exists():
+                self.jobs_db.backfill_tasks(load_tasks(config.search.output_file),
+                                            config.search.output_file)
+            for instance_dir in (root / "data" / "instances").glob("*"):
+                self.communications_db.migrate_from(instance_dir / "communications.db")
+                self.chat_db.migrate_legacy(instance_dir / "boss_assistant.db")
             taxonomy_path = root / "data" / "job.md"
             if taxonomy_path.exists():
                 self.taxonomy = parse_job_taxonomy(taxonomy_path)
@@ -310,6 +321,19 @@ _atomic_save_search = _save_config
 
 
 def run_ui(root: Path, config_path: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
+    lock_path = root / "data" / "ui.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_handle = lock_path.open("a+b")
+    if lock_handle.tell() == 0:
+        lock_handle.write(b"0"); lock_handle.flush()
+    lock_handle.seek(0)
+    if msvcrt is not None:
+        try:
+            msvcrt.locking(lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            lock_handle.close()
+            print(f"UI 已经在运行：http://{host}:{port}")
+            return 2
     controller = JobController(root, config_path); web_root = Path(__file__).with_name("web")
     class Handler(BaseHTTPRequestHandler):
         def respond(self, data: bytes, content_type: str, status: int = 200) -> None:
@@ -338,5 +362,11 @@ def run_ui(root: Path, config_path: Path, host: str = "127.0.0.1", port: int = 8
     server=ThreadingHTTPServer((host,port),Handler); url=f"http://{host}:{port}"; print(f"BOSS 自动化控制台：{url}"); threading.Timer(.7,lambda:webbrowser.open(url)).start()
     try: server.serve_forever()
     except KeyboardInterrupt: pass
-    finally: server.server_close()
+    finally:
+        server.server_close()
+        if msvcrt is not None:
+            lock_handle.seek(0)
+            try: msvcrt.locking(lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError: pass
+        lock_handle.close()
     return 0
