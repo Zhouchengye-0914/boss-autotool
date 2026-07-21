@@ -21,12 +21,33 @@ from boss_assistant.daily_report import DailyReportGenerator
 from boss_assistant.scanner import BossJobScanner, jobs_to_tasks, save_tasks
 from boss_assistant.ui import run_ui
 from boss_assistant.instances import isolated_config
+from boss_assistant.talent_data import JobsDatabase, ProfileReader, parse_job_taxonomy
+from boss_assistant.talent_data import CommunicationsDatabase, ChatDatabase
+from boss_assistant.matching import match_job, recommend_titles
+from boss_assistant.deepseek import DeepSeekError, DeepSeekResumeMatcher
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = ROOT / "config.yaml"
 FREEZE_FILE = ROOT / "environment-freeze.txt"
 REQUIRED_PYTHON = (3, 10, 1)
 PROJECT_DEPENDENCIES = {"DrissionPage": "4.1.1.4", "PyYAML": "6.0.2"}
+RESUME_URL = "https://www.zhipin.com/web/geek/resume"
+
+
+def capture_profile(session, config, jobs_db: JobsDatabase):
+    tab = session.page.new_tab(RESUME_URL)
+    try:
+        tab.wait(3)
+        snapshot = ProfileReader().capture(tab)
+        if not snapshot.sections:
+            print("[PROFILE] 未读取到在线简历字段，继续使用数据库中的最近快照。")
+            return jobs_db.latest_profile()
+        changed = jobs_db.save_profile(snapshot)
+        print(f"[PROFILE] 在线简历快照已{'更新' if changed else '确认未变化'}。")
+        return snapshot
+    finally:
+        try: tab.close()
+        except Exception: pass
 
 
 def current_freeze() -> str:
@@ -90,7 +111,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="BOSS 直聘 Chrome 自动化助手")
     result.add_argument(
         "command", nargs="?",
-        choices=["ui", "validate", "browser-check", "chat-check", "scan", "run", "status", "environment-check"],
+        choices=["ui", "validate", "browser-check", "profile-sync", "chat-check", "scan", "run", "status", "environment-check"],
     )
     result.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     result.add_argument("--tasks", type=Path)
@@ -164,6 +185,19 @@ def main() -> int:
                 print("登录状态检查通过。")
                 return 0
             jobs_tab = session.page.latest_tab
+            jobs_db = JobsDatabase(config.storage.jobs_database_path)
+            jobs_db.initialize()
+            communications_db = CommunicationsDatabase(config.storage.communications_database_path)
+            communications_db.initialize()
+            chat_db = ChatDatabase(config.storage.chat_database_path)
+            chat_db.initialize()
+            taxonomy_path = config.project_root / "data" / "job.md"
+            if taxonomy_path.exists():
+                jobs_db.replace_taxonomy(parse_job_taxonomy(taxonomy_path))
+            profile = capture_profile(session, config, jobs_db)
+            if args.command == "profile-sync":
+                print("在线简历同步完成。" if profile else "在线简历同步失败。")
+                return 0 if profile else 1
             if args.command == "scan":
                 BossTaskExecutor(jobs_tab, config).wait_for_login()
                 search_config = config.search
@@ -175,7 +209,39 @@ def main() -> int:
                     search_config = replace(search_config, max_pages_per_keyword=args.max_pages)
                 scanner = BossJobScanner(jobs_tab, search_config)
                 jobs = scanner.scan()
-                tasks = jobs_to_tasks(jobs, config)
+                eligible_jobs = []
+                for job in scanner.last_raw_jobs:
+                    matched = match_job(job, profile, search_config.match_threshold) if profile else None
+                    score = matched.score if matched else 0.0
+                    reasons = list(matched.reasons) if matched else ["缺少在线简历快照"]
+                    eligible = bool(matched and matched.eligible and job in jobs)
+                    jobs_db.upsert_job(job, score, reasons, eligible)
+                    if eligible:
+                        job["match_score"] = score
+                        eligible_jobs.append(job)
+                tasks = jobs_to_tasks(eligible_jobs, config)
+                if profile and not search_config.keywords:
+                    suggestions = recommend_titles(
+                        profile, parse_job_taxonomy(taxonomy_path), search_config.recommendation_limit
+                    ) if taxonomy_path.exists() else []
+                    print("[PROFILE] 推荐搜索职位：" + "、".join(suggestions))
+                if profile and config.resume.deepseek.enabled:
+                    assistant = DeepSeekResumeMatcher(config.resume.deepseek)
+                    personalized = []
+                    for task in tasks:
+                        try:
+                            safe_profile = "\n".join(
+                                text for name, text in profile.sections.items() if name != "personal"
+                            )
+                            greeting = assistant.greeting(
+                                safe_profile, "\n".join((task.job_title, task.company,
+                                                        task.job_description, task.job_category))
+                            )
+                            personalized.append(replace(task, greeting=greeting or task.greeting))
+                        except DeepSeekError as exc:
+                            print(f"[AI] {task.task_id} 招呼语生成失败，使用默认文案：{exc}")
+                            personalized.append(task)
+                    tasks = personalized
                 save_tasks(config.search.output_file, tasks)
                 print(f"[SEARCH] 已保存 {len(tasks)} 条任务：{config.search.output_file}")
                 return 0
@@ -202,7 +268,11 @@ def main() -> int:
             if config.chat and config.chat.enabled:
                 chat_tab = session.page.new_tab(CHAT_URL)
                 chat_monitor = ChatMonitor(
-                    chat_tab, config.chat, record_store, reporter, config.resume
+                    chat_tab, config.chat, record_store, reporter, config.resume,
+                    chat_db=chat_db,
+                    profile_text=("\n".join(
+                        value for key, value in profile.sections.items() if key != "personal"
+                    ) if profile else ""),
                 )
                 reporter.status("已建立一个固定聊天标签页；聊天检查与批量沟通共用主线程串行执行。")
             if args.command == "chat-check":
@@ -253,6 +323,17 @@ def main() -> int:
                     retryable=True,
                 )
 
+            def record_communication(task, result):
+                status = "verified" if result.status.value == "success" else result.status.value
+                communications_db.record(
+                    task_id=task.task_id, job_id=task.job_id, job_url=task.job_url,
+                    job_title=result.job_name or task.job_title,
+                    company=result.company or task.company, greeting=task.greeting,
+                    source="deepseek" if task.greeting != config.search.greeting else "template",
+                    score=task.match_score, status=status, attempts=result.attempt,
+                    reason=result.reason,
+                )
+
             scheduler = TaskScheduler(
                 config,
                 store,
@@ -262,6 +343,7 @@ def main() -> int:
                 before_task=before_task,
                 after_task=after_task,
                 verify_success=verify_success,
+                on_attempt_result=record_communication,
             )
             final_state = scheduler.run(tasks)
             report_md, _ = DailyReportGenerator(

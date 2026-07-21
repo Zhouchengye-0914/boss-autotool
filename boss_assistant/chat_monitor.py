@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
 
-from .actions import human_click
+from .actions import find_unique, human_click
 from .config import ChatConfig, ResumeConfig
 from .deepseek import DeepSeekError, DeepSeekResumeMatcher, choose_resume
 from .persistence import SHANGHAI
@@ -51,6 +51,10 @@ class ResumeInvitationClassifier:
         return InvitationDecision("none")
 
 
+REJECTION_PATTERN = re.compile(r"不合适|不匹配|很遗憾|暂不考虑|已招到|不太符合|停止招聘")
+INTERVIEW_PATTERN = re.compile(r"面试|面谈|视频面|电话面|到公司|来公司|面邀|邀约|方便.{0,8}(?:时间|几点)")
+
+
 @dataclass
 class ChatCheckResult:
     unread_conversations: int = 0
@@ -71,6 +75,8 @@ class ChatMonitor:
         store: RecordStore,
         reporter: LayeredReporter,
         resume_config: ResumeConfig | None = None,
+        chat_db: Any | None = None,
+        profile_text: str = "",
         *,
         rng: random.Random | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -85,6 +91,8 @@ class ChatMonitor:
         self.sleeper = sleeper
         self.classifier = ResumeInvitationClassifier()
         self.resume_config = resume_config
+        self.chat_db = chat_db
+        self.profile_text = profile_text
         self.resume_matcher = DeepSeekResumeMatcher(resume_config.deepseek) if resume_config else None
         self.resume_sender = ChatResumeSender(tab, rng=self.rng, sleeper=self.sleeper)
         self.last_refresh_at = 0.0
@@ -245,6 +253,47 @@ class ChatMonitor:
             )
         return records
 
+    def _safe_send_reply(
+        self, conversation_id: str, contact_name: str, based_on: str, reply: str
+    ) -> tuple[bool, str]:
+        """发送前刷新并比较消息指纹，防止与手机端或新到消息冲突。"""
+        try:
+            self.tab.refresh()
+            self.sleeper(self.rng.uniform(1.5, 3.0))
+            target = None
+            for locator in selectors.CHAT_CONVERSATION_ITEMS:
+                items = [x for x in self.tab.eles(locator, timeout=1) if self._positive_rect(x)]
+                target = next((x for x in items if contact_name in (x.text or "")), None)
+                if target: break
+            if target is None:
+                return False, "刷新后未找到原会话，取消自动回复"
+            human_click(self.tab, target, rng=self.rng, sleeper=self.sleeper)
+            self.sleeper(self.rng.uniform(0.5, 1.0))
+            fresh = self._visible_messages(conversation_id, contact_name)
+            if self.chat_db is not None:
+                for message in fresh: self.chat_db.record_message(message)
+            if not fresh or fresh[-1].fingerprint != based_on:
+                return False, "消息已由手机端或对方更新，草稿作废"
+            if fresh[-1].direction != "inbound":
+                return False, "最后一条已经是己方消息，取消自动回复"
+            field = find_unique(self.tab, selectors.GREETING_INPUT, timeout=1)
+            if field is None:
+                return False, "未找到唯一聊天输入框"
+            try: field.clear()
+            except Exception: pass
+            field.input(reply)
+            field.input("\n")
+            self.sleeper(self.rng.uniform(1.0, 2.0))
+            confirmed = self._visible_messages(conversation_id, contact_name)
+            if any(message.direction == "outbound" and self._compact(reply) in self._compact(message.text)
+                   for message in confirmed[-4:]):
+                if self.chat_db is not None:
+                    for message in confirmed: self.chat_db.record_message(message)
+                return True, "自动回复已进入己方消息记录"
+            return False, "自动回复结果未在消息气泡中确认"
+        except Exception as exc:
+            return False, f"自动回复异常: {type(exc).__name__}: {exc}"
+
     @staticmethod
     def _compact(text: str) -> str:
         return re.sub(r"\s+", "", text or "")
@@ -328,13 +377,18 @@ class ChatMonitor:
                 human_click(self.tab, item, rng=self.rng, sleeper=self.sleeper)
                 self.sleeper(self.rng.uniform(0.5, 1.5))
                 visible_messages = self._visible_messages(conversation_id, contact_name)
+                if self.chat_db is not None:
+                    for message in visible_messages:
+                        self.chat_db.record_message(message)
                 explicit_request = False
+                latest_new_inbound = None
                 for message in visible_messages:
                     if not self.store.add_message(message):
                         continue
                     result.new_messages += 1
                     if message.direction != "inbound":
                         continue
+                    latest_new_inbound = message
                     decision = self.classifier.classify(message.text)
                     if decision.classification == "explicit":
                         explicit_request = True
@@ -343,6 +397,58 @@ class ChatMonitor:
                     elif decision.classification == "manual_review":
                         if self.store.add_invitation(message, "manual_review", decision.keyword):
                             result.manual_reviews += 1
+                ai_resume_request = False
+                resume_key_override = ""
+                if latest_new_inbound is not None and self.chat_db is not None:
+                    text = latest_new_inbound.text
+                    based_on = latest_new_inbound.fingerprint
+                    if REJECTION_PATTERN.search(text):
+                        self.chat_db.record_decision(conversation_id, based_on, "ignore", "",
+                                                     "completed", "识别为拒绝或结束沟通")
+                    elif INTERVIEW_PATTERN.search(text):
+                        if self.chat_db.record_interview_alert(conversation_id, based_on, text):
+                            self.reporter.attention(
+                                f"检测到 {contact_name} 的面试相关消息，请在手机端人工接管；本会话已暂停自动回复。"
+                            )
+                    elif self.resume_matcher and self.resume_config and self.resume_config.deepseek.enabled:
+                        job_title, company = self._job_meta()
+                        profile_text = self.profile_text or "候选人具备数据分析、Python、SQL、AI应用项目及应届生经历"
+                        conversation_text = "\n".join(
+                            f"{m.direction}:{m.text}" for m in visible_messages[-8:]
+                        )
+                        try:
+                            decision = self.resume_matcher.conversation_decision(
+                                profile_text, f"{job_title}\n{company}", conversation_text,
+                                self.resume_config.conversation_preferences,
+                            )
+                            action = decision["action"]
+                            if action == "interview_alert":
+                                self.chat_db.record_interview_alert(conversation_id, based_on, text)
+                                self.reporter.attention(
+                                    f"DeepSeek 判断 {contact_name} 涉及面试，请在手机端人工接管。"
+                                )
+                            elif action == "send_resume":
+                                ai_resume_request = True
+                                resume_key_override = decision["resume_key"]
+                                self.chat_db.record_decision(conversation_id, based_on, action, "",
+                                                             "approved", decision["reason"])
+                            elif action == "reply" and decision["reply"]:
+                                self.chat_db.record_decision(conversation_id, based_on, action,
+                                                             decision["reply"], "drafted",
+                                                             decision["reason"])
+                                sent, reason = self._safe_send_reply(
+                                    conversation_id, contact_name, based_on, decision["reply"]
+                                )
+                                self.chat_db.record_decision(
+                                    conversation_id, based_on, action, decision["reply"],
+                                    "sent" if sent else "cancelled", reason,
+                                )
+                                self.reporter.chat(f"{contact_name}：{reason}")
+                            else:
+                                self.chat_db.record_decision(conversation_id, based_on, "ignore", "",
+                                                             "completed", decision["reason"])
+                        except DeepSeekError as exc:
+                            self.reporter.attention(f"{contact_name} 的 AI 判断失败，保持不回复：{exc}")
                 proactive_contact = (
                     any(message.direction == "inbound" for message in visible_messages)
                     and not any(message.direction == "outbound" for message in visible_messages)
@@ -352,14 +458,18 @@ class ChatMonitor:
                     allow_resume_send and resume_cfg and not self.store.resume_sent(conversation_id)
                     and (
                         (proactive_contact and resume_cfg.auto_send_on_proactive_contact)
-                        or (explicit_request and resume_cfg.auto_send_on_explicit_invitation)
+                        or ((explicit_request or ai_resume_request)
+                            and resume_cfg.auto_send_on_explicit_invitation)
                     )
                 )
                 if should_send and resume_cfg and self.resume_matcher:
                     job_title, company = self._job_meta()
                     job_text = "\n".join((job_title, company, *(m.text for m in visible_messages[-6:])))
                     try:
-                        option = choose_resume(job_text, resume_cfg.options, self.resume_matcher)
+                        option = next(
+                            (item for item in resume_cfg.options if item.key == resume_key_override),
+                            None,
+                        ) or choose_resume(job_text, resume_cfg.options, self.resume_matcher)
                         send_result = self.resume_sender.send(option)
                         self.store.record_resume_delivery(
                             conversation_id, job_title, company, option.key,

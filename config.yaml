@@ -36,6 +36,8 @@ search:
   company_blacklist: []
   greeting: 您好，我是26届本科应届生，具备Python、SQL、数据分析及AI应用项目经验，对该岗位很感兴趣，希望有机会进一步沟通，谢谢！
   output_file: ./data/tasks.scanned.json
+  match_threshold: 58
+  recommendation_limit: 12
 pacing:
   min_wait_seconds: 3
   max_wait_seconds: 15
@@ -60,20 +62,17 @@ chat_monitor:
 storage:
   database_path: ./data/boss_assistant.db
   reports_dir: ./reports
+  jobs_database_path: ./data/jobs.db
+  communications_database_path: ./data/communications.db
+  chat_database_path: ./data/chat.db
 resume_delivery:
   auto_send_on_proactive_contact: true
   auto_send_on_explicit_invitation: true
+  conversation_preferences: >-
+    优先数据分析、数据运营、AI应用或AI产品相关岗位；工作城市优先杭州、上海；
+    面试时间、到岗时间、薪资承诺和个人隐私信息必须由本人确认；不主动承诺无法核实的经历。
   options:
-  - key: data_analysis
-    display_name: 数据相关-
-    option_index: 2
-    keywords:
-    - 数据分析
-    - 商业分析
-    - SQL
-    - BI
-    - 数据挖掘
-  - key: data_operations
+  - key: general
     display_name: 周成业-浙理工-应数26本-
     option_index: 0
     keywords:
@@ -92,12 +91,20 @@ resume_delivery:
     - AIGC
     - Agent
     - 产品
+  - key: data
+    display_name: 数据相关-
+    option_index: 2
+    keywords:
+    - 数据分析
+    - 商业分析
+    - SQL
+    - BI
+    - 数据挖掘
   deepseek:
-    enabled: false
+    enabled: true
     endpoint: https://api.deepseek.com/chat/completions
     model: deepseek-chat
     api_key_env: DEEPSEEK_API_KEY
     timeout_seconds: 20
-
 ui:
-  parallel_workers: 2
+  parallel_workers: 1

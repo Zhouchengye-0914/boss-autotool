@@ -23,15 +23,16 @@ class UiConfigTests(unittest.TestCase):
             self.assertEqual(config.search.min_salary_k, 9)
             self.assertEqual(config.search.company_blacklist, ("示例公司",))
 
-    def test_empty_keywords_are_rejected(self):
+    def test_empty_keywords_enable_recommendation_mode(self):
         source = Path(__file__).resolve().parents[1] / "config.yaml"
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "config.yaml"
             target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                _atomic_save_search(target, {"keywords": [], "max_pages": 2,
-                                             "min_salary": 8, "workers": 2,
-                                             "greeting": "hello"})
+            _atomic_save_search(target, {"keywords": [], "max_pages": 2,
+                                         "min_salary": 8, "workers": 2,
+                                         "greeting": "hello", "resume_general": "通用-",
+                                         "resume_ai": "AI-", "resume_data": "数据-"})
+            self.assertEqual(load_config(target).search.keywords, ())
 
     def test_abort_terminates_active_child(self):
         class FakeProcess:

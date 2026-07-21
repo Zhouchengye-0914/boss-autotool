@@ -3,7 +3,9 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-from boss_assistant.chat_monitor import ResumeInvitationClassifier
+from boss_assistant.chat_monitor import (
+    INTERVIEW_PATTERN, REJECTION_PATTERN, ResumeInvitationClassifier,
+)
 from boss_assistant.models import JobTask, OperationType
 from boss_assistant.persistence import SHANGHAI
 from boss_assistant.records import MessageRecord, RecordStore
@@ -24,6 +26,10 @@ class InvitationClassifierTests(unittest.TestCase):
     def test_ambiguous_resume_mention_requires_review(self):
         decision = self.classifier.classify("我先看看你的简历")
         self.assertEqual(decision.classification, "manual_review")
+
+    def test_rejection_and_interview_are_distinguished(self):
+        self.assertIsNotNone(REJECTION_PATTERN.search("很遗憾，目前不太合适"))
+        self.assertIsNotNone(INTERVIEW_PATTERN.search("明天下午方便视频面试吗"))
 
 
 class RecordStoreTests(unittest.TestCase):

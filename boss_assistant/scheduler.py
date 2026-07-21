@@ -22,6 +22,7 @@ class TaskScheduler:
         before_task: Callable[[], Any] | None = None,
         after_task: Callable[[JobTask, TaskResult], Any] | None = None,
         verify_success: Callable[[JobTask, TaskResult], TaskResult] | None = None,
+        on_attempt_result: Callable[[JobTask, TaskResult], Any] | None = None,
     ):
         self.config = config
         self.store = store
@@ -31,6 +32,7 @@ class TaskScheduler:
         self.before_task = before_task
         self.after_task = after_task
         self.verify_success = verify_success
+        self.on_attempt_result = on_attempt_result
 
     def run(self, tasks: list[JobTask]) -> RunState:
         pending = self.store.pending(tasks)
@@ -62,6 +64,8 @@ class TaskScheduler:
                     if result.status is ResultStatus.SUCCESS and self.verify_success is not None:
                         result = self.verify_success(task, result)
                         result.attempt = attempts
+                    if self.on_attempt_result is not None:
+                        self.on_attempt_result(task, result)
                     if result.status is ResultStatus.SUCCESS:
                         self.store.record(task, "success", attempts, result.reason)
                         self.output.result(task, result)

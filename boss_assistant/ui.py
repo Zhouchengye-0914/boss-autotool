@@ -19,6 +19,8 @@ import yaml
 from .config import load_config
 from .persistence import ProgressStore, load_tasks
 from .scanner import save_tasks
+from .talent_data import ChatDatabase, CommunicationsDatabase, JobsDatabase, parse_job_taxonomy
+from .matching import recommend_titles
 
 
 HTML = r"""<!doctype html>
@@ -30,17 +32,20 @@ HTML = r"""<!doctype html>
 </style></head><body><div class="wrap">
 <div class="hero"><div><h1>BOSS 自动化控制台</h1><p>搜索、串行沟通、回复检查与附件简历投递</p></div><div class="hero-right"><button onclick="help(true)">功能说明</button><div id="badge" class="pill">正在连接</div></div></div>
 <div class="grid"><section class="card"><h2>搜索与沟通设置</h2><div class="fields">
-<div class="wide"><label>搜索关键词（逗号或换行分隔）</label><textarea id="keywords"></textarea></div>
+<div class="wide"><label>搜索关键词（可留空，留空时使用 BOSS 个性化推荐流）</label><textarea id="keywords" placeholder="留空也可以运行"></textarea><div class="notice">根据在线简历与 job.md 推荐：<span id="suggestions">读取中…</span> <button onclick="useSuggestions()">填入推荐词</button></div></div>
 <div><label>每个关键词最多页数</label><input id="pages" type="number" min="1" max="50"></div><div><label>最低薪资 K</label><input id="salary" type="number" min="0" max="100"></div>
 <div><label>并行沟通实例数（1–4）</label><input id="workers" type="number" min="1" max="4"></div><div><label>运行方式</label><input value="独立 Chrome + 独立断点" disabled></div>
 <div class="wide"><label>自动招呼语</label><textarea id="greeting"></textarea></div>
 <div class="wide"><label>排除职位词（逗号分隔）</label><input id="exclude"></div><div class="wide"><label>公司黑名单（逗号分隔）</label><input id="blacklist"></div>
-</div><div class="actions"><button onclick="saveConfig()">保存搜索设置</button><button class="dark" onclick="run('browser')">检查登录</button>
+<div><label>通用简历名称匹配词</label><input id="resumeGeneral"></div><div><label>AI 简历名称匹配词</label><input id="resumeAi"></div>
+<div><label>数据简历名称匹配词</label><input id="resumeData"></div><div><label>DeepSeek 自动判断</label><input id="deepseekEnabled" type="checkbox" style="width:auto"></div>
+<div class="wide"><label>求职期望与自动回复限制</label><textarea id="preferences"></textarea></div>
+</div><div class="actions"><button onclick="saveConfig()">保存全部设置</button><button class="dark" onclick="run('browser')">检查登录</button><button class="wide" onclick="run('profile')">同步在线简历并更新推荐词</button>
 <button class="primary wide" onclick="run('full')">一键开始：搜索 → 串行沟通 → 持续检查回复并投递</button>
 <button class="stop" onclick="stopRun()">当前步骤结束后停止</button><button class="abort" onclick="abortRun()">立即中止当前任务</button>
 <details class="advanced"><summary>单独执行某项功能（高级操作）</summary><div class="advanced-grid"><button class="dark wide" onclick="run('init-workers')">首次使用：初始化全部并行实例登录</button><button onclick="run('scan')">只搜索岗位</button><button onclick="run('communicate')">只执行并行沟通</button><button onclick="run('check')">只检查 HR 回复</button><button class="warn" onclick="run('resume')">单次检查并自动投递</button><button class="dark wide" onclick="run('watch')">持续监控回复与简历邀请</button></div></details></div>
 <p class="notice">自动投递不需要输入联系人，只处理未读回复；明确邀请或符合主动联系规则后才发送，并按岗位匹配通用 / AI / 数据简历。</p></section>
-<section class="card"><div class="statusline"><h2>运行状态</h2><strong id="stage">空闲</strong></div><div class="stats">
+<section class="card"><div id="interviewAlert" style="display:none;background:#fde9e9;color:#a22;padding:12px;border-radius:11px;margin-bottom:12px;font-weight:700">检测到面试相关消息：请立即在手机端人工接管，系统不会自动确认。</div><div class="statusline"><h2>运行状态</h2><strong id="stage">空闲</strong></div><div class="stats">
 <div class="stat"><b id="total">0</b><span>扫描任务</span></div><div class="stat"><b id="pending">0</b><span>待沟通</span></div><div class="stat"><b id="success">0</b><span>今日成功</span></div><div class="stat"><b id="quota">300</b><span>今日剩余额度</span></div></div>
 <div class="flow"><span>搜索</span><i></i><span>串行沟通</span><i></i><span>回复检查</span><i></i><span>简历匹配</span></div><div id="log" class="log">等待操作…</div></section></div></div>
 <div id="help" class="modal" onclick="if(event.target===this)help(false)"><div class="modal-box"><div class="statusline"><h2>按钮功能说明</h2><button onclick="help(false)">关闭</button></div>
@@ -56,12 +61,13 @@ HTML = r"""<!doctype html>
 let initialized=false;
 async function api(path,options={}){let r=await fetch(path,options);let j=await r.json();if(!r.ok)throw Error(j.error||'请求失败');return j}
 function split(v){return v.split(/[，,\n]/).map(x=>x.trim()).filter(Boolean)}
-async function saveConfig(silent=false){try{await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keywords:split(keywords.value),max_pages:+pages.value,min_salary:+salary.value,workers:+workers.value,greeting:greeting.value.trim(),exclude:split(exclude.value),blacklist:split(blacklist.value)})});if(!silent)alert('配置已同步到后端');return true}catch(e){alert(e.message);return false}}
+async function saveConfig(silent=false){try{await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keywords:split(keywords.value),max_pages:+pages.value,min_salary:+salary.value,workers:+workers.value,greeting:greeting.value.trim(),exclude:split(exclude.value),blacklist:split(blacklist.value),resume_general:resumeGeneral.value.trim(),resume_ai:resumeAi.value.trim(),resume_data:resumeData.value.trim(),deepseek_enabled:deepseekEnabled.checked,preferences:preferences.value.trim()})});if(!silent)alert('配置已同步到后端');return true}catch(e){alert(e.message);return false}}
 async function run(action){try{if(!await saveConfig(true))return;await api('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})})}catch(e){alert(e.message)}}
 async function stopRun(){try{await api('/api/stop',{method:'POST'})}catch(e){alert(e.message)}}
 async function abortRun(){if(!confirm('立即中止当前任务？已成功的断点会保留。'))return;try{await api('/api/abort',{method:'POST'})}catch(e){alert(e.message)}}
 function help(open){document.getElementById('help').classList.toggle('open',open)}
-async function poll(){try{let s=await api('/api/state');badge.textContent=s.running?'运行中':'系统就绪';badge.className='pill '+(s.running?'busy':'ok');stage.textContent=s.stage;total.textContent=s.total;pending.textContent=s.pending;success.textContent=s.success;quota.textContent=s.quota;let box=document.getElementById('log');let atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<40;box.textContent=s.logs.join('\n')||'等待操作…';if(atBottom)box.scrollTop=box.scrollHeight;if(!initialized){keywords.value=s.config.keywords.join('\n');pages.value=s.config.max_pages;salary.value=s.config.min_salary;workers.value=s.config.workers;greeting.value=s.config.greeting;exclude.value=s.config.exclude.join(', ');blacklist.value=s.config.blacklist.join(', ');initialized=true}}catch(e){badge.textContent='连接失败'}setTimeout(poll,1200)}poll();
+let suggested=[];function useSuggestions(){keywords.value=suggested.join('\n')}
+async function poll(){try{let s=await api('/api/state');badge.textContent=s.running?'运行中':'系统就绪';badge.className='pill '+(s.running?'busy':'ok');stage.textContent=s.stage;total.textContent=s.total;pending.textContent=s.pending;success.textContent=s.success;quota.textContent=s.quota;interviewAlert.style.display=s.interview_alerts>0?'block':'none';suggested=s.config.suggestions||[];suggestions.textContent=suggested.join('、')||'尚无简历快照';let box=document.getElementById('log');let atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<40;box.textContent=s.logs.join('\n')||'等待操作…';if(atBottom)box.scrollTop=box.scrollHeight;if(!initialized){keywords.value=s.config.keywords.join('\n');pages.value=s.config.max_pages;salary.value=s.config.min_salary;workers.value=s.config.workers;greeting.value=s.config.greeting;exclude.value=s.config.exclude.join(', ');blacklist.value=s.config.blacklist.join(', ');resumeGeneral.value=s.config.resume_general;resumeAi.value=s.config.resume_ai;resumeData.value=s.config.resume_data;deepseekEnabled.checked=s.config.deepseek_enabled;preferences.value=s.config.preferences;initialized=true}}catch(e){badge.textContent='连接失败'}setTimeout(poll,1200)}poll();
 </script></body></html>"""
 
 
@@ -90,17 +96,45 @@ class JobController:
         pending = [task for task in tasks if task.task_id not in terminal]
         raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
         workers = int((raw.get("ui") or {}).get("parallel_workers", 2))
+        option_names = {option.key: option.display_name for option in config.resume.options}
+        suggestions: list[str] = []
+        interview_alerts = 0
+        try:
+            jobs_db = JobsDatabase(config.storage.jobs_database_path)
+            jobs_db.initialize()
+            profile = jobs_db.latest_profile()
+            taxonomy_path = self.root / "data" / "job.md"
+            if profile and taxonomy_path.exists():
+                suggestions = recommend_titles(
+                    profile, parse_job_taxonomy(taxonomy_path), config.search.recommendation_limit
+                )
+        except Exception as exc:
+            self.log(f"职位推荐读取失败：{exc}")
+        try:
+            chat_db = ChatDatabase(config.storage.chat_database_path)
+            chat_db.initialize()
+            CommunicationsDatabase(config.storage.communications_database_path).initialize()
+            interview_alerts = len(chat_db.pending_interview_alerts())
+        except Exception as exc:
+            self.log(f"面试提醒读取失败：{exc}")
         with self.lock:
             return {
                 "running": self.running, "stage": self.stage, "logs": list(self.logs),
                 "total": len(tasks), "pending": len(pending), "success": success,
                 "quota": max(0, config.scheduler.daily_success_limit - success),
+                "interview_alerts": interview_alerts,
                 "config": {"keywords": list(config.search.keywords),
                     "max_pages": config.search.max_pages_per_keyword,
                     "workers": workers,
                     "min_salary": config.search.min_salary_k, "greeting": config.search.greeting,
                     "exclude": list(config.search.exclude_title_keywords),
-                    "blacklist": list(config.search.company_blacklist)},
+                    "blacklist": list(config.search.company_blacklist),
+                    "resume_general": option_names.get("general", ""),
+                    "resume_ai": option_names.get("ai", ""),
+                    "resume_data": option_names.get("data", ""),
+                    "deepseek_enabled": config.resume.deepseek.enabled,
+                    "preferences": config.resume.conversation_preferences,
+                    "suggestions": suggestions},
             }
 
     def _combined_progress(self, config: Any) -> tuple[set[str], int]:
@@ -262,6 +296,7 @@ class JobController:
     def _worker(self, action: str) -> None:
         plans = {
             "browser": [(["browser-check"], "检查 Chrome 登录")],
+            "profile": [(["profile-sync"], "同步在线简历")],
             "init-workers": [],
             "scan": [(["scan"], "搜索岗位")],
             "communicate": [],
@@ -317,8 +352,8 @@ def _atomic_save_search(config_path: Path, payload: dict[str, Any]) -> None:
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     search = raw.setdefault("search", {})
     keywords = payload.get("keywords")
-    if not isinstance(keywords, list) or not keywords or not all(isinstance(x, str) and x.strip() for x in keywords):
-        raise ValueError("至少填写一个搜索关键词")
+    if not isinstance(keywords, list) or not all(isinstance(x, str) and x.strip() for x in keywords):
+        raise ValueError("搜索关键词必须是字符串列表，也可以为空")
     pages = int(payload.get("max_pages", 0))
     salary = int(payload.get("min_salary", 0))
     workers = int(payload.get("workers", 0))
@@ -336,6 +371,16 @@ def _atomic_save_search(config_path: Path, payload: dict[str, Any]) -> None:
                   exclude_title_keywords=[str(x).strip() for x in payload.get("exclude", []) if str(x).strip()],
                   company_blacklist=[str(x).strip() for x in payload.get("blacklist", []) if str(x).strip()])
     raw.setdefault("ui", {})["parallel_workers"] = workers
+    resume = raw.setdefault("resume_delivery", {})
+    option_values = {"general": str(payload.get("resume_general") or "").strip(),
+                     "ai": str(payload.get("resume_ai") or "").strip(),
+                     "data": str(payload.get("resume_data") or "").strip()}
+    for option in resume.get("options", []):
+        key = str(option.get("key") or "")
+        if key in option_values and option_values[key]:
+            option["display_name"] = option_values[key]
+    resume.setdefault("deepseek", {})["enabled"] = bool(payload.get("deepseek_enabled", False))
+    resume["conversation_preferences"] = str(payload.get("preferences") or "").strip()
     temp = config_path.with_suffix(".yaml.tmp")
     temp.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
     load_config(temp)
@@ -371,7 +416,7 @@ def run_ui(root: Path, config_path: Path, host: str = "127.0.0.1", port: int = 8
                     _atomic_save_search(config_path, payload); controller.log("搜索设置已同步到 config.yaml")
                 elif path == "/api/action":
                     action = str(payload.get("action") or "")
-                    if action not in {"browser", "init-workers", "scan", "communicate", "check", "resume", "watch", "full"}:
+                    if action not in {"browser", "profile", "init-workers", "scan", "communicate", "check", "resume", "watch", "full"}:
                         raise ValueError("未知操作")
                     controller.start(action)
                 elif path == "/api/stop": controller.stop()

@@ -32,6 +32,7 @@ class JobTask:
     company: str = ""
     job_category: str = ""
     job_description: str = ""
+    match_score: float = 0.0
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "JobTask":
@@ -67,6 +68,7 @@ class JobTask:
             str(raw.get("company") or "").strip(),
             str(raw.get("job_category") or raw.get("category") or "").strip(),
             str(raw.get("job_description") or raw.get("jd") or "").strip(),
+            float(raw.get("match_score") or 0),
         )
 
 

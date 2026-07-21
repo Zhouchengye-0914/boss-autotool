@@ -44,5 +44,8 @@ def isolated_config(
         config.storage,
         database_path=base / "boss_assistant.db",
         reports_dir=base / "reports",
+        jobs_database_path=base / "jobs.db",
+        communications_database_path=base / "communications.db",
+        chat_database_path=base / "chat.db",
     )
     return replace(config, browser=browser, scheduler=scheduler, output=output, storage=storage)

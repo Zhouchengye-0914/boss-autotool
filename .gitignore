@@ -11,5 +11,6 @@ screenshots/*.png
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/boss_site_probe.json
 reports/daily/*
 .env
