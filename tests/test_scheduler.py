@@ -56,6 +56,33 @@ class SchedulerTests(unittest.TestCase):
             self.assertEqual(state.success, 1)
             self.assertEqual(store.success_count_today(), 1)
 
+    def test_unconfirmed_success_is_retried_before_persisting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            task = JobTask("one", "https://example.com/job", "", "你好", "简历.pdf", OperationType.COMMUNICATION)
+            store = ProgressStore(config.scheduler.progress_file)
+            pacing = PacingController(config.pacing, sleeper=lambda _: None, reporter=lambda _: None)
+            checks = []
+
+            def verify(_task, result):
+                checks.append(True)
+                if len(checks) == 1:
+                    return TaskResult(ResultStatus.FAILED, reason="固定聊天页未找到消息")
+                return result
+
+            scheduler = TaskScheduler(
+                config, store, pacing,
+                CsvOutput(config.output.result_csv, config.output.error_csv),
+                lambda _task, attempt: TaskResult(ResultStatus.SUCCESS, attempt=attempt),
+                verify_success=verify,
+            )
+            state = scheduler.run([task])
+            self.assertEqual(len(checks), 2)
+            self.assertEqual(state.success, 1)
+            self.assertEqual(state.failed_attempts, 1)
+            self.assertEqual(store.success_count_today(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
